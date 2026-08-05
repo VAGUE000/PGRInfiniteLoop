@@ -1293,7 +1293,10 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(notifyLogin);
             session.SendPush(notifyPayInfo);
             session.SendPush(notifyMails);
-            session.SendPush(new NotifyEquipChipGroupList());
+            session.SendPush(new NotifyEquipChipGroupList
+            {
+                ChipGroupDataList = session.player.EquipChipGroups
+            });
             session.SendPush(new NotifyEquipChipAutoRecycleSite()
             {
                 ChipRecycleSite = new()

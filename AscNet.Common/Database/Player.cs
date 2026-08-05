@@ -605,6 +605,9 @@ namespace AscNet.Common.Database
         [BsonElement("team_prefabs")]
         public List<TeamPrefabData> TeamPrefabs { get; set; } = new();
 
+        [BsonElement("equip_chip_groups")]
+        public List<EquipChipGroupData> EquipChipGroups { get; set; } = new();
+
         [BsonElement("fuben_main_line_data")]
         public FubenMainLineData FubenMainLineData { get; set; } = new();
 

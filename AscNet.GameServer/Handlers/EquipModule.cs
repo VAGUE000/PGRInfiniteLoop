@@ -190,6 +190,58 @@ namespace AscNet.GameServer.Handlers
     }
 
     [MessagePackObject(true)]
+    public class EquipAddChipGroupRequest
+    {
+        public string Name = "";
+        public List<int> ChipIds = new();
+        public int CharacterId;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipAddChipGroupResponse
+    {
+        public int Code;
+        public EquipChipGroupData? ChipGroupData;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipDeleteChipGroupRequest
+    {
+        public int GroupId;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipDeleteChipGroupResponse
+    {
+        public int Code;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipUpdateChipGroupRequest
+    {
+        public EquipChipGroupData? GroupData;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipUpdateChipGroupResponse
+    {
+        public int Code;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipPutOnChipGroupRequest
+    {
+        public int CharacterId;
+        public int GroupId;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipPutOnChipGroupResponse
+    {
+        public int Code;
+    }
+
+    [MessagePackObject(true)]
     public class EquipLevelUpRequest
     {
         public int EquipId;
@@ -830,6 +882,120 @@ namespace AscNet.GameServer.Handlers
             }
 
             session.SendResponse(new EquipTakeOffResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("EquipAddChipGroupRequest")]
+        public static void EquipAddChipGroupRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipAddChipGroupRequest request = packet.Deserialize<EquipAddChipGroupRequest>();
+            EquipChipGroupData group = new()
+            {
+                GroupId = session.player.EquipChipGroups.Count == 0
+                    ? 1
+                    : checked(session.player.EquipChipGroups.Max(value => value.GroupId) + 1),
+                Name = request.Name.Trim(),
+                ChipIdList = request.ChipIds.ToList(),
+                CharacterId = request.CharacterId
+            };
+            if (!IsValidChipGroup(session, group))
+            {
+                session.SendResponse(new EquipAddChipGroupResponse { Code = 20021012 }, packet.Id);
+                return;
+            }
+
+            session.player.EquipChipGroups.Add(group);
+            session.player.Save();
+            session.SendResponse(new EquipAddChipGroupResponse { ChipGroupData = group }, packet.Id);
+        }
+
+        [RequestPacketHandler("EquipDeleteChipGroupRequest")]
+        public static void EquipDeleteChipGroupRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipDeleteChipGroupRequest request = packet.Deserialize<EquipDeleteChipGroupRequest>();
+            int removed = session.player.EquipChipGroups.RemoveAll(value => value.GroupId == request.GroupId);
+            if (removed == 0)
+            {
+                session.SendResponse(new EquipDeleteChipGroupResponse { Code = 20021012 }, packet.Id);
+                return;
+            }
+
+            session.player.Save();
+            session.SendResponse(new EquipDeleteChipGroupResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("EquipUpdateChipGroupRequest")]
+        public static void EquipUpdateChipGroupRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipUpdateChipGroupRequest request = packet.Deserialize<EquipUpdateChipGroupRequest>();
+            EquipChipGroupData? source = request.GroupData;
+            int index = source is null
+                ? -1
+                : session.player.EquipChipGroups.FindIndex(value => value.GroupId == source.GroupId);
+            if (index < 0 || !IsValidChipGroup(session, source!))
+            {
+                session.SendResponse(new EquipUpdateChipGroupResponse { Code = 20021012 }, packet.Id);
+                return;
+            }
+
+            session.player.EquipChipGroups[index] = new EquipChipGroupData
+            {
+                GroupId = source!.GroupId,
+                Name = source.Name.Trim(),
+                ChipIdList = source.ChipIdList.ToList(),
+                CharacterId = source.CharacterId
+            };
+            session.player.Save();
+            session.SendResponse(new EquipUpdateChipGroupResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("EquipPutOnChipGroupRequest")]
+        public static void EquipPutOnChipGroupRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipPutOnChipGroupRequest request = packet.Deserialize<EquipPutOnChipGroupRequest>();
+            EquipChipGroupData? group = session.player.EquipChipGroups
+                .FirstOrDefault(value => value.GroupId == request.GroupId);
+            if (group is null
+                || !session.character.Characters.Any(value => value.Id == request.CharacterId)
+                || (group.CharacterId != 0 && group.CharacterId != request.CharacterId)
+                || !IsValidChipGroup(session, group))
+            {
+                session.SendResponse(new EquipPutOnChipGroupResponse { Code = 20021012 }, packet.Id);
+                return;
+            }
+
+            HashSet<uint> selectedIds = group.ChipIdList.Select(value => (uint)value).ToHashSet();
+            foreach (EquipData equip in session.character.Equips)
+            {
+                EquipTable? row = Character.ResolveEquipTemplate(equip.TemplateId);
+                if (row?.Site > 0 && equip.CharacterId == request.CharacterId)
+                    equip.CharacterId = 0;
+                if (selectedIds.Contains(equip.Id))
+                    equip.CharacterId = request.CharacterId;
+            }
+            session.character.Save();
+            session.SendResponse(new EquipPutOnChipGroupResponse(), packet.Id);
+        }
+
+        private static bool IsValidChipGroup(Session session, EquipChipGroupData group)
+        {
+            if (string.IsNullOrWhiteSpace(group.Name)
+                || group.ChipIdList is not { Count: > 0 and <= 6 }
+                || group.ChipIdList.Distinct().Count() != group.ChipIdList.Count
+                || (group.CharacterId != 0
+                    && !session.character.Characters.Any(value => value.Id == group.CharacterId)))
+            {
+                return false;
+            }
+
+            HashSet<int> sites = new();
+            foreach (int chipId in group.ChipIdList)
+            {
+                EquipData? equip = session.character.Equips.FirstOrDefault(value => value.Id == chipId);
+                EquipTable? row = equip is null ? null : Character.ResolveEquipTemplate(equip.TemplateId);
+                if (row is null || row.Site <= 0 || !sites.Add(row.Site))
+                    return false;
+            }
+            return true;
         }
 
         [RequestPacketHandler("EquipResonanceRequest")]

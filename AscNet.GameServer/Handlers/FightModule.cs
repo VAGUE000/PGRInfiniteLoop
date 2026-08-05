@@ -1200,7 +1200,7 @@ namespace AscNet.GameServer.Handlers
             Dictionary<int, CharacterData> ownedCharactersById = session.character.Characters
                 .GroupBy(character => (int)character.Id)
                 .ToDictionary(group => group.Key, group => group.First());
-            List<(int CharacterId, EquipData Equip)> equipPlan = new();
+            List<(int CharacterId, EquipData Equip, TeamPrefabEquipEntry Preset)> equipPlan = new();
             List<(int CharacterId, PartnerData Partner, TeamPrefabPartnerData Preset)> partnerPlan = new();
 
             foreach ((int position, int characterId) in teamPrefab.TeamData.OrderBy(pair => pair.Key))
@@ -1223,7 +1223,7 @@ namespace AscNet.GameServer.Handlers
                             SendInvalidTeamPrefabApplyResponse(session, packet.Id);
                             return;
                         }
-                        equipPlan.Add((characterId, equip));
+                        equipPlan.Add((characterId, equip, presetEquip));
                     }
                 }
 
@@ -1242,8 +1242,8 @@ namespace AscNet.GameServer.Handlers
                 }
             }
 
-            foreach ((int characterId, EquipData equip) in equipPlan)
-                ApplyTeamPrefabEquip(session.character, characterId, equip);
+            foreach ((int characterId, EquipData equip, TeamPrefabEquipEntry preset) in equipPlan)
+                ApplyTeamPrefabEquip(session.character, characterId, equip, preset);
 
             HashSet<int> targetCharacterIds = teamPrefab.TeamData.Values
                 .Where(characterId => characterId > 0)
@@ -1313,7 +1313,8 @@ namespace AscNet.GameServer.Handlers
         private static void ApplyTeamPrefabEquip(
             AscNet.Common.Database.Character character,
             int characterId,
-            EquipData selectedEquip)
+            EquipData selectedEquip,
+            TeamPrefabEquipEntry preset)
         {
             EquipTable selectedRow = EquipRowsById.Value[selectedEquip.TemplateId];
             int previousCharacterId = selectedEquip.CharacterId;
@@ -1326,6 +1327,17 @@ namespace AscNet.GameServer.Handlers
                 previousEquip.CharacterId = selectedRow.Site == 0 ? previousCharacterId : 0;
 
             selectedEquip.CharacterId = characterId;
+            if (selectedRow.Site != 0)
+                return;
+
+            foreach ((int slot, int skillId) in preset.ResonanceDict ?? [])
+            {
+                ResonanceInfo? resonance = selectedEquip.ResonanceInfo
+                    .LastOrDefault(value => value.Slot == slot);
+                if (resonance is not null)
+                    resonance.TemplateId = skillId;
+            }
+            selectedEquip.WeaponOverrunData.ChoseSuit = preset.WeaponOverrunSuitId;
         }
 
         private static void ApplyTeamPrefabPartnerSkills(

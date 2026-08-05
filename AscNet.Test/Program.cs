@@ -14643,6 +14643,9 @@ namespace AscNet.Test
             previousWeapon.CharacterId = firstCharacterId;
             previousAwareness.CharacterId = firstCharacterId;
             untouchedAwareness.CharacterId = firstCharacterId;
+            foreach (ResonanceInfo resonance in weaponEquip.ResonanceInfo)
+                resonance.TemplateId = 0;
+            weaponEquip.WeaponOverrunData.ChoseSuit = 0;
             character.Equips.AddRange([previousWeapon, previousAwareness, untouchedAwareness]);
 
             PartnerData secondPartner = character.Partners.Single(partner => partner.Id == 802);
@@ -14679,6 +14682,85 @@ namespace AscNet.Test
                     (characterCollection.LastReplacement
                         ?? throw new InvalidDataException("Team prefab apply did not persist Character.")).ToBson());
             AssertAppliedState(persistedAppliedCharacter, "persisted apply");
+
+            int chipGroupPlayerSaves = playerCollection.ReplaceOneCalls;
+            InvokeRegisteredRequestHandler(
+                nameof(EquipAddChipGroupRequest),
+                harness.Session,
+                71_080,
+                new EquipAddChipGroupRequest
+                {
+                    Name = "Awareness",
+                    ChipIds = [7_002, 7_005],
+                    CharacterId = 0
+                });
+            EquipAddChipGroupResponse addChipGroup = ReadResponsePayload<EquipAddChipGroupResponse>(
+                harness,
+                71_080,
+                nameof(EquipAddChipGroupResponse),
+                "memory preset add");
+            AssertEqual(0, addChipGroup.Code, "memory preset add Code");
+            EquipChipGroupData chipGroup = addChipGroup.ChipGroupData
+                ?? throw new InvalidDataException("Memory preset add omitted ChipGroupData.");
+            AssertIntegerList([7_002, 7_005], chipGroup.ChipIdList.Select(value => (long)value).ToArray(),
+                "memory preset add chip ids");
+            AssertEqual(chipGroupPlayerSaves + 1, playerCollection.ReplaceOneCalls,
+                "memory preset add persists Player");
+
+            InvokeRegisteredRequestHandler(
+                nameof(EquipUpdateChipGroupRequest),
+                harness.Session,
+                71_081,
+                new EquipUpdateChipGroupRequest
+                {
+                    GroupData = new EquipChipGroupData
+                    {
+                        GroupId = chipGroup.GroupId,
+                        Name = "Renamed",
+                        ChipIdList = chipGroup.ChipIdList.ToList(),
+                        CharacterId = 0
+                    }
+                });
+            AssertEqual(0, ReadResponsePayload<EquipUpdateChipGroupResponse>(
+                harness, 71_081, nameof(EquipUpdateChipGroupResponse), "memory preset rename").Code,
+                "memory preset rename Code");
+            AssertEqual("Renamed", player.EquipChipGroups.Single().Name, "memory preset rename");
+
+            int chipGroupCharacterSaves = characterCollection.ReplaceOneCalls;
+            InvokeRegisteredRequestHandler(
+                nameof(EquipPutOnChipGroupRequest),
+                harness.Session,
+                71_082,
+                new EquipPutOnChipGroupRequest
+                {
+                    CharacterId = secondCharacterId,
+                    GroupId = chipGroup.GroupId
+                });
+            AssertEqual(0, ReadResponsePayload<EquipPutOnChipGroupResponse>(
+                harness, 71_082, nameof(EquipPutOnChipGroupResponse), "memory preset equip").Code,
+                "memory preset equip Code");
+            AssertEqual(secondCharacterId, character.Equips.Single(equip => equip.Id == 7_002).CharacterId,
+                "memory preset awareness carrier");
+            AssertEqual(secondCharacterId, character.Equips.Single(equip => equip.Id == 7_005).CharacterId,
+                "memory preset second awareness carrier");
+            AssertEqual(chipGroupCharacterSaves + 1, characterCollection.ReplaceOneCalls,
+                "memory preset equip persists Character");
+
+            AscNet.Common.Database.Player persistedChipGroups =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(
+                    player.ToBson());
+            AssertEqual("Renamed", persistedChipGroups.EquipChipGroups.Single().Name,
+                "memory preset survives BSON round-trip");
+
+            InvokeRegisteredRequestHandler(
+                nameof(EquipDeleteChipGroupRequest),
+                harness.Session,
+                71_083,
+                new EquipDeleteChipGroupRequest { GroupId = chipGroup.GroupId });
+            AssertEqual(0, ReadResponsePayload<EquipDeleteChipGroupResponse>(
+                harness, 71_083, nameof(EquipDeleteChipGroupResponse), "memory preset delete").Code,
+                "memory preset delete Code");
+            AssertEqual(0, player.EquipChipGroups.Count, "memory preset delete");
 
             void DispatchApplyAndAssert(
                 int teamId,
@@ -14796,6 +14878,17 @@ namespace AscNet.Test
                 AssertEqual(firstCharacterId,
                     actual.Equips.Single(equip => equip.Id == 7_005).CharacterId,
                     $"{name} untouched awareness carrier");
+                AssertIntegerList(
+                    resonanceSkills.Select(value => (long)value).ToArray(),
+                    actual.Equips.Single(equip => equip.Id == 7_001).ResonanceInfo
+                        .OrderBy(value => value.Slot)
+                        .Select(value => (long)value.TemplateId)
+                        .ToArray(),
+                    $"{name} weapon resonance selections");
+                AssertEqual(
+                    overrunSuitId,
+                    actual.Equips.Single(equip => equip.Id == 7_001).WeaponOverrunData.ChoseSuit,
+                    $"{name} weapon overrun selection");
 
                 PartnerData appliedFirstPartner = actual.Partners.Single(partner => partner.Id == 801);
                 PartnerData appliedSecondPartner = actual.Partners.Single(partner => partner.Id == 802);

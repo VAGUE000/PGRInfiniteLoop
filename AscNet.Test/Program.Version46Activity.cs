@@ -1071,7 +1071,7 @@ internal static partial class Program
         AssertDto("TransfiniteConfirmBattleResultRequest", "StageGroupId", "IsGiveUp");
         AssertDto("TransfiniteConfirmBattleResultResponse", "Code", "RewardGoodsList", "BattleInfo");
         AssertDto("TransfiniteResetStageGroupRequest", "StageGroupId");
-        AssertDto("TransfiniteResetStageGroupResponse", "Code", "BattleInfo");
+        AssertDto("TransfiniteResetStageGroupResponse", "Code", "RewardGoodsList", "BattleInfo");
         AssertDto("TransfiniteGetScoreRewardRequest", "ScoreRewardIndex");
         AssertDto("TransfiniteGetScoreRewardResponse", "Code", "RewardGoodsList", "GotScoreRewardIndex");
 
@@ -1282,23 +1282,44 @@ internal static partial class Program
             .Single(group => group.StageGroupId == flowGroup).StageId[0];
         TransfiniteStageGroupTable resetGroup = TableReaderV2.Parse<TransfiniteStageGroupTable>()
             .Single(group => group.StageGroupId == flowGroup);
+        Dictionary<int, TransfiniteStageTable> resetStageRows = TableReaderV2.Parse<TransfiniteStageTable>()
+            .ToDictionary(row => row.StageId);
         int resetAnchor = TableReaderV2.Parse<TransfiniteStartStageProgressTable>()
             .Select(row => row.StartProgress)
-            .FirstOrDefault(progress => progress > 1 && progress < resetGroup.StageId.Count);
+            .FirstOrDefault(progress => progress > 1 && progress < resetGroup.StageId.Count
+                && resetStageRows[resetGroup.StageId[progress - 2]].Score != resetStageRows[resetGroup.StageId[progress - 1]].Score);
         if (resetAnchor == 0)
-            throw new InvalidDataException("Transfinite reset requires a table-derived noninitial anchor.");
+            throw new InvalidDataException("Transfinite reset requires two table-derived noninitial scores.");
+        int resetFirstStageId = resetGroup.StageId[resetAnchor - 2];
         int resetStageId = resetGroup.StageId[resetAnchor - 1];
         int resetActiveStageId = resetGroup.StageId[resetAnchor];
+        int resetFirstScore = resetStageRows[resetFirstStageId].Score ?? 0;
+        int resetScore = resetStageRows[resetStageId].Score ?? 0;
+        if (resetFirstScore < 0 || resetScore < 0)
+            throw new InvalidDataException("Transfinite reset stages require nonnegative table scores.");
+        int resetTotal = checked(resetFirstScore + resetScore);
         void SeedResetProgress()
         {
             TransfiniteBattleState battle = flowPlayer.Transfinite!.BattleInfo!;
             battle.StartStageProgress = resetAnchor;
             battle.StageProgressIndex = resetAnchor;
-            battle.StageInfo = [new TransfiniteStageState { StageId = resetStageId, IsWin = true }];
+            battle.StageInfo =
+            [
+                new TransfiniteStageState { StageId = resetFirstStageId, IsWin = true, SpendTime = int.MaxValue, Score = resetFirstScore },
+                new TransfiniteStageState { StageId = resetStageId, IsWin = true, SpendTime = int.MaxValue, Score = resetScore }
+            ];
             battle.Result = new TransfiniteBattleResultState { LastWinStageId = resetStageId };
             battle.LastResult = new TransfiniteBattleResultState { LastWinStageId = resetStageId };
             battle.HistoryResults = [new TransfiniteBattleResultState { LastWinStageId = resetStageId }];
         }
+        SeedResetProgress();
+        flowPlayer.Transfinite!.BattleInfo!.LastResult = null;
+        InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_287,
+            new TransfiniteSetTeamRequest { StageGroupId = flowGroup, TeamInfo = Team(1, 2, 0), ResetStageIndex = true });
+        TransfiniteSetTeamResponse sameGroupReset = ReadResponsePayload<TransfiniteSetTeamResponse>(
+            flowHarness, 46_287, nameof(TransfiniteSetTeamResponse), "Transfinite same-group reset SetTeam");
+        AssertEqual(0, sameGroupReset.BattleInfo?.StageProgressIndex, "Transfinite same-group reset clears progress");
+        AssertEqual(0, sameGroupReset.BattleInfo?.StageInfo.Count, "Transfinite same-group reset clears confirmed stages");
         SeedResetProgress();
         int wrongResetGroup = TableReaderV2.Parse<TransfiniteStageGroupTable>()
             .First(group => group.StageGroupId != flowGroup).StageGroupId;
@@ -1311,6 +1332,7 @@ internal static partial class Program
         AssertEqual(beforeWrongReset, Convert.ToHexString(flowPlayer.Transfinite.ToBson()),
             "Transfinite wrong-group reset does not mutate state");
 
+        string beforeFailedResetInventory = Convert.ToHexString(flowHarness.Session.inventory.ToBson());
         Fight resetFight = new(new PreFightRequest
         {
             PreFightData = new() { StageId = (uint)resetActiveStageId }
@@ -1324,6 +1346,8 @@ internal static partial class Program
         AssertEqual(20201006, ReadResponsePayload<TransfiniteResetStageGroupResponse>(
             flowHarness, 46_288, nameof(TransfiniteResetStageGroupResponse), "Transfinite reset persistence failure").Code,
             "Transfinite reset persistence failure code");
+        AssertEqual(beforeFailedResetInventory, Convert.ToHexString(flowHarness.Session.inventory.ToBson()),
+            "Transfinite reset persistence failure rolls back inventory");
         AssertEqual(beforeFailedReset, Convert.ToHexString(flowPlayer.Transfinite.ToBson()),
             "Transfinite reset persistence failure rolls back state");
         AssertEqual(true, ReferenceEquals(resetFight, flowHarness.Session.fight),
@@ -1335,8 +1359,15 @@ internal static partial class Program
         flowPlayer.Transfinite.LastModifyTime = 1;
         InvokeRegisteredRequestHandler(nameof(TransfiniteResetStageGroupRequest), flowHarness.Session, 46_285,
             new TransfiniteResetStageGroupRequest { StageGroupId = flowGroup });
+        Packet resetPush = flowHarness.ReadPacket("Transfinite reset tally push");
+        AssertEqual(Packet.ContentType.Push, resetPush.Type, "Transfinite reset tally push precedes response");
+        Packet.Push resetPushEnvelope = MessagePackSerializer.Deserialize<Packet.Push>(resetPush.Content);
+        AssertEqual(nameof(NotifyItemDataList), resetPushEnvelope.Name, "Transfinite reset tally push name");
+        NotifyItemDataList resetItems = MessagePackSerializer.Deserialize<NotifyItemDataList>(resetPushEnvelope.Content);
+        AssertEqual(Math.Min((long)resetTotal, Inventory.GetMaxCount(TableReaderV2.Parse<ItemTable>().Single(item => item.Id == 105))),
+            resetItems.ItemDataList.Single(item => item.Id == 105).Count, "Transfinite reset tally item push");
         TransfiniteResetStageGroupResponse resetResponse = ReadResponsePayload<TransfiniteResetStageGroupResponse>(
-            flowHarness, 46_285, nameof(TransfiniteResetStageGroupResponse), "Transfinite reset abort");
+            flowHarness, 46_285, nameof(TransfiniteResetStageGroupResponse), "Transfinite reset tally");
         AssertEqual(0, resetResponse.Code, "Transfinite reset abort code");
         AssertEqual(null, resetResponse.BattleInfo, "Transfinite reset response discards BattleInfo");
         AssertEqual(null, flowPlayer.Transfinite.BattleInfo, "Transfinite reset persists no BattleInfo");
@@ -1345,6 +1376,22 @@ internal static partial class Program
         AssertEqual(123, flowPlayer.Transfinite.BestSpendTime[flowGroup], "Transfinite reset preserves best time");
         AssertEqual(true, flowPlayer.Transfinite.GotScoreRewardIndex.SequenceEqual([1]), "Transfinite reset preserves score rewards");
         AssertEqual(true, flowPlayer.Transfinite.LastModifyTime > 1, "Transfinite reset updates modify time");
+        AssertEqual(resetTotal, resetResponse.RewardGoodsList.Single(item => item.TemplateId == 105).Count,
+            "Transfinite reset returns summed table-derived scores");
+        AssertEqual(Math.Min((long)resetTotal, Inventory.GetMaxCount(TableReaderV2.Parse<ItemTable>().Single(item => item.Id == 105))),
+            flowHarness.Session.inventory.Items.Single(item => item.Id == 105).Count, "Transfinite reset tally updates inventory");
+
+        InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_281,
+            new TransfiniteSetTeamRequest { StageGroupId = flowGroup, TeamInfo = Team(1, 2, 0), ResetStageIndex = true });
+        _ = ReadResponsePayload<TransfiniteSetTeamResponse>(flowHarness, 46_281,
+            nameof(TransfiniteSetTeamResponse), "Transfinite empty reset SetTeam");
+        InvokeRegisteredRequestHandler(nameof(TransfiniteResetStageGroupRequest), flowHarness.Session, 46_280,
+            new TransfiniteResetStageGroupRequest { StageGroupId = flowGroup });
+        TransfiniteResetStageGroupResponse emptyReset = ReadResponsePayload<TransfiniteResetStageGroupResponse>(
+            flowHarness, 46_280, nameof(TransfiniteResetStageGroupResponse), "Transfinite empty reset");
+        AssertEqual(0, emptyReset.Code, "Transfinite empty reset code");
+        AssertEqual(0, emptyReset.RewardGoodsList.Count, "Transfinite empty reset has no goods");
+        AssertEqual(null, flowPlayer.Transfinite.BattleInfo, "Transfinite empty reset clears run");
 
         InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_282,
             new TransfiniteSetTeamRequest { StageGroupId = flowGroup, TeamInfo = Team(1, 2, 0), ResetStageIndex = true });
@@ -1509,6 +1556,14 @@ internal static partial class Program
             Dictionary<int, NpcHp> hp = index == 0
                 ? new()
                 {
+                    [998] = new NpcHp
+                    {
+                        CharacterId = 1, Type = 3, BuffIds = [],
+                        AttrTable = new()
+                        {
+                            [1] = new Dictionary<object, object> { ["Value"] = 100, ["MaxValue"] = 100 }
+                        }
+                    },
                     [999] = new NpcHp
                     {
                         CharacterId = 1, Type = 1, BuffIds = [],
@@ -1526,11 +1581,15 @@ internal static partial class Program
                     StageId = (uint)stageId, FightId = started.FightData.FightId, IsWin = true,
                     LeftTime = spend, NpcHpInfo = hp
                 } });
-            AssertEqual(0, ReadResponsePayload<FightSettleResponse>(fullHarness, packetId + 1,
-                nameof(FightSettleResponse), $"Transfinite stage {index + 1} FightSettle").Code,
-                $"Transfinite stage {index + 1} FightSettle code");
+            FightSettleResponse fightSettle = ReadResponsePayload<FightSettleResponse>(fullHarness, packetId + 1,
+                nameof(FightSettleResponse), $"Transfinite stage {index + 1} FightSettle");
+            AssertEqual(0, fightSettle.Code, $"Transfinite stage {index + 1} FightSettle code");
             TransfiniteBattleState pending = fullPlayer.Transfinite!.BattleInfo!;
             AssertEqual(stageId, pending.LastResult!.LastWinStageId, $"Transfinite stage {index + 1} pending stage");
+            TransfiniteBattleResult wireResult = MessagePackSerializer.Deserialize<TransfiniteBattleResult>(
+                MessagePackSerializer.Serialize(fightSettle.Settle.TransfiniteBattleResult));
+            AssertEqual(stageId, wireResult.LastWinStageId, $"Transfinite stage {index + 1} wire result stage");
+            AssertEqual(spend, wireResult.StageSpendTime, $"Transfinite stage {index + 1} wire result time");
             if (index == 0)
             {
                 AssertEqual(55, pending.LastResult.CharacterResultList.Single(x => x.CharacterId == 1).HpPercent,

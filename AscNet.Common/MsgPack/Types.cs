@@ -604,9 +604,19 @@ namespace AscNet.Common.MsgPack
 
 
     [global::MessagePack.MessagePackObject(true)]
+    public class EquipChipGroupData
+    {
+        public Int32 GroupId { get; set; }
+        public String Name { get; set; } = "";
+        public List<Int32> ChipIdList { get; set; } = new();
+        public Int32 CharacterId { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
     public class NotifyEquipChipGroupList
     {
-        public List<dynamic> ChipGroupDataList { get; set; } = new();
+        public List<EquipChipGroupData> ChipGroupDataList { get; set; } = new();
     }
 
 
