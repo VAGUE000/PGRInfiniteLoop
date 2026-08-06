@@ -292,6 +292,9 @@ internal static class TransfiniteModule
         if (changed.Count > 0) s.SendPush(new NotifyItemDataList { ItemDataList = changed }); s.SendResponse(ToResponse(receipt), p.Id);
     }
     private static bool IsAllowedGroup(TransfiniteState state, int groupId) => state.StageGroupId == groupId || Regions.Value.SingleOrDefault(x => x.RegionId == state.RegionId) is { } region && Islands.Value.Any(x => x.Id == region.IslandId && x.StageGroupId.Contains(groupId));
+    internal static bool IsRetryPreFight(Session s, uint stageId) =>
+        stageId <= int.MaxValue
+        && s.player.Transfinite?.BattleInfo?.LastResult?.LastWinStageId == (int)stageId;
     internal static bool ApplyPreFight(Session s, PreFightRequest.PreFightRequestPreFightData r, out int code)
     {
         if (!IsStage(r.StageId)) { code = 0; return false; }

@@ -9,6 +9,7 @@ using AscNet.Table.V2.share.partner;
 using AscNet.Table.V2.share.team;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.fuben;
+using AscNet.Table.V2.share.fashion;
 using AscNet.Table.V2.share.fuben.mainline2;
 using AscNet.Table.V2.share.item;
 using AscNet.Table.V2.share.reward;
@@ -476,6 +477,9 @@ namespace AscNet.GameServer.Handlers
                 session.SendResponse(rsp, packet.Id);
                 return;
             }
+            bool preserveRandomFashionRoll = TransfiniteModule.IsRetryPreFight(
+                session,
+                req.PreFightData.StageId);
 
             bool isFashionStage = FashionStoryModule.TryValidateStage(
                 session, (int)req.PreFightData.StageId, out int fashionCode);
@@ -598,6 +602,7 @@ namespace AscNet.GameServer.Handlers
                 if (cardId == 0)
                     continue;
                 CharacterData? characterData = session.character.Characters.FirstOrDefault(x => x.Id == cardId);
+                bool isOwnedCharacter = characterData is not null;
                 IEnumerable<EquipData> equips;
                 if (characterData is null)
                 {
@@ -611,17 +616,21 @@ namespace AscNet.GameServer.Handlers
                 {
                     equips = BuildTeamPrefabFightEquips(session, cardId);
                 }
+                int weaponFashionId = session.character.WeaponFashions
+                    .Find(fashion =>
+                        (fashion.ExpireTime == 0 || fashion.ExpireTime > currentUnixTime)
+                        && fashion.UseCharacterList.Contains((int)characterData.Id))
+                    ?.Id ?? 0;
+                if (isOwnedCharacter)
+                    characterData = ApplyRandomFashion(session, characterData, preserveRandomFashionRoll, ref weaponFashionId);
+
 
                 PartnerData? partner = session.character.Partners.FirstOrDefault(x => x.CharacterId == characterData.Id);
                 playerNpcData.Add(i, new
                 {
                     Character = characterData,
                     Equips = equips,
-                    WeaponFashionId = session.character.WeaponFashions
-                        .Find(fashion =>
-                            (fashion.ExpireTime == 0 || fashion.ExpireTime > currentUnixTime)
-                            && fashion.UseCharacterList.Contains((int)characterData.Id))
-                        ?.Id ?? 0,
+                    WeaponFashionId = weaponFashionId,
                     Partner = partner
                 });
             }
@@ -741,6 +750,102 @@ namespace AscNet.GameServer.Handlers
             session.fight = new(req, rsp.FightData.FightId);
             session.SendResponse(rsp, packet.Id);
         }
+
+        private static CharacterData ApplyRandomFashion(
+            Session session,
+            CharacterData character,
+            bool preserve,
+            ref int weaponFashionId)
+        {
+            if (!character.RandomFashion)
+            {
+                session.RandomFashionRolls.Remove(character.Id);
+                return character;
+            }
+
+            if (preserve
+                && session.RandomFashionRolls.TryGetValue(character.Id, out var preserved))
+            {
+                weaponFashionId = preserved.WeaponFashionId;
+                return CloneCharacterWithFashion(character, preserved.FashionId);
+            }
+
+            HashSet<int> characterFashionIds = TableReaderV2.Parse<FashionTable>()
+                .Where(row => row.CharacterId == character.Id)
+                .Select(row => row.Id)
+                .ToHashSet();
+            List<FashionList> pool = session.character.Fashions
+                .Where(fashion => !fashion.IsLock
+                    && fashion.IsRandom
+                    && fashion.Id > 0
+                    && fashion.Id <= int.MaxValue
+                    && characterFashionIds.Contains((int)fashion.Id))
+                .ToList();
+            session.RandomFashionRolls.TryGetValue(character.Id, out var previous);
+            uint excludedFashionId = previous.FashionId != 0
+                ? previous.FashionId
+                : character.FashionId;
+            List<FashionList> candidates = pool
+                .Where(fashion => fashion.Id != excludedFashionId)
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                if (previous.FashionId != 0
+                    && pool.Any(fashion => fashion.Id == previous.FashionId))
+                {
+                    weaponFashionId = previous.WeaponFashionId;
+                    return CloneCharacterWithFashion(character, previous.FashionId);
+                }
+
+                session.RandomFashionRolls.Remove(character.Id);
+                return character;
+            }
+
+            FashionList selected = candidates[Random.Shared.Next(candidates.Count)];
+            int selectedWeaponFashionId = selected.WeaponFashionId is >= 0 and <= int.MaxValue
+                ? (int)selected.WeaponFashionId
+                : weaponFashionId;
+            if (selectedWeaponFashionId != 0
+                && !session.character.WeaponFashions.Any(fashion =>
+                    fashion.Id == selectedWeaponFashionId
+                    && (fashion.ExpireTime == 0
+                        || fashion.ExpireTime > DateTimeOffset.UtcNow.ToUnixTimeSeconds())))
+            {
+                selectedWeaponFashionId = weaponFashionId;
+            }
+
+            uint selectedFashionId = checked((uint)selected.Id);
+            session.RandomFashionRolls[character.Id] = (selectedFashionId, selectedWeaponFashionId);
+            weaponFashionId = selectedWeaponFashionId;
+            return CloneCharacterWithFashion(character, selectedFashionId);
+        }
+
+        private static CharacterData CloneCharacterWithFashion(CharacterData source, uint fashionId) => new()
+        {
+            Id = source.Id,
+            Level = source.Level,
+            Exp = source.Exp,
+            Quality = source.Quality,
+            InitQuality = source.InitQuality,
+            Star = source.Star,
+            Grade = source.Grade,
+            SkillList = source.SkillList,
+            EnhanceSkillList = source.EnhanceSkillList,
+            MagicList = source.MagicList,
+            FashionId = fashionId,
+            CreateTime = source.CreateTime,
+            TrustLv = source.TrustLv,
+            TrustExp = source.TrustExp,
+            Ability = source.Ability,
+            LiberateLv = source.LiberateLv,
+            CharacterHeadInfo = source.CharacterHeadInfo,
+            LiberateAureoleId = source.LiberateAureoleId,
+            NewFlag = source.NewFlag,
+            RandomFashion = source.RandomFashion,
+            CollectState = source.CollectState,
+            IsEnhanceSkillNotice = source.IsEnhanceSkillNotice,
+            CharacterType = source.CharacterType
+        };
 
         [RequestPacketHandler("FightRebootRequest")]
         public static void HandleFightRebootRequestHandler(Session session, Packet.Request packet)

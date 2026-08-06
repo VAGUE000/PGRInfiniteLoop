@@ -1191,6 +1191,11 @@ namespace AscNet.GameServer.Handlers
             };
         }
 
+        private static NotifyEquipChipAutoRecycleSite BuildEquipChipAutoRecycleNotify(Player player) => new()
+        {
+            ChipRecycleSite = player.EquipChipAutoRecycleSite
+        };
+
         // TODO: Move somewhere else, also split.
         static void DoLogin(Session session)
         {
@@ -1298,13 +1303,7 @@ namespace AscNet.GameServer.Handlers
             {
                 ChipGroupDataList = session.player.EquipChipGroups
             });
-            session.SendPush(new NotifyEquipChipAutoRecycleSite()
-            {
-                ChipRecycleSite = new()
-                {
-                    RecycleStar = [1, 2, 3, 4]
-                }
-            });
+            session.SendPush(BuildEquipChipAutoRecycleNotify(session.player));
             session.SendPush(new NotifyEquipGuideData()
             {
                 EquipGuideData = new()

@@ -428,6 +428,12 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--equip-chip-recycle-compat-only"))
+                {
+                    ValidateEquipChipRecycleCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--equip-decompose-compat-only"))
                 {
                     ValidateEquipDecomposeCompatibility();
@@ -613,6 +619,7 @@ namespace AscNet.Test
                 ValidatePr2QualityCompatibility();
                 ValidateInventoryEquipCompatibility();
                 ValidateEquipDecomposeCompatibility();
+                ValidateEquipChipRecycleCompatibility();
                 ValidateDrawCompatibility();
                 ValidateItemUseCompatibility();
                 ValidateItemSellCompatibility();
@@ -18583,6 +18590,211 @@ namespace AscNet.Test
                 throw new InvalidDataException($"EquipDecompose repeat deleted source request emitted unexpected {unexpectedPacket.Type} packet.");
         }
 
+        private static void ValidateEquipChipRecycleCompatibility()
+        {
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForDailySignInCompatibility(
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Player> playerCollection,
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> characterCollection,
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Inventory> inventoryCollection);
+
+            Dictionary<string, int> config = TableReaderV2.Parse<ConfigTable>()
+                .Where(row => row.Key is "EquipRecycleItemId" or "EquipRecycleItemPercent" or "EquipExpInheritPercent")
+                .ToDictionary(
+                    row => row.Key,
+                    row => int.Parse(row.Value, System.Globalization.CultureInfo.InvariantCulture));
+            int recycleItemId = config["EquipRecycleItemId"];
+            int recyclePercent = config["EquipRecycleItemPercent"];
+            int inheritPercent = config["EquipExpInheritPercent"];
+            (EquipTable Template, EquipBreakThroughTable Breakthrough, AscNet.Common.Database.EquipLevelUpTemplate Level) fixture =
+                (from template in TableReaderV2.Parse<EquipTable>()
+                 where template.Site > 0
+                    && template.Star <= 5
+                    && AscNet.Common.Database.Character.IsOwnableEquipTemplate(template)
+                 let breakthrough = AscNet.Common.Database.Character.ResolveEquipBreakThrough((uint)template.Id, 0)
+                 where breakthrough is not null
+                 let level = AscNet.Common.Database.Character.equipLevelUpTemplates.FirstOrDefault(row =>
+                     row.TemplateId == breakthrough.LevelUpTemplateId && row.Level == 1)
+                 where level is not null
+                    && decimal.Floor(
+                        ((decimal)level.AllExp * inheritPercent / 100m + breakthrough.Exp)
+                        * recyclePercent / 100m) > 0
+                 select (template, breakthrough, level)).FirstOrDefault();
+            if (fixture.Template is null || fixture.Breakthrough is null || fixture.Level is null)
+                throw new InvalidDataException("EquipChipRecycle compatibility: no table-backed recyclable awareness fixture.");
+
+            int rewardPerChip = (int)decimal.Floor(
+                ((decimal)fixture.Level.AllExp * inheritPercent / 100m + fixture.Breakthrough.Exp)
+                * recyclePercent / 100m);
+            const long playerId = 99_402;
+            uint[] chipIds = [51_001, 51_002, 51_003];
+            AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+            character.Equips =
+            [
+                .. chipIds.Select(id => new EquipData
+                {
+                    Id = id,
+                    TemplateId = (uint)fixture.Template.Id,
+                    CharacterId = 0,
+                    Level = 1,
+                    Exp = 0,
+                    Breakthrough = 0,
+                    ResonanceInfo = [],
+                    UnconfirmedResonanceInfo = [],
+                    AwakeSlotList = [],
+                    WeaponOverrunData = new()
+                })
+            ];
+            character.Equips[0].IsLock = true;
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            player.TeamPrefabs = [];
+            AscNet.Common.Database.Inventory inventory = CreateDrawCompatibilityInventory(playerId, []);
+            using LoopbackSessionHarness harness = new(
+                character,
+                player,
+                inventory,
+                "equip-chip-recycle-compat-test");
+
+            const int protectedPacketId = 14_310;
+            InvokeRegisteredRequestHandler(
+                nameof(EquipChipRecycleRequest),
+                harness.Session,
+                protectedPacketId,
+                new EquipChipRecycleRequest { ChipIds = [(int)chipIds[0]] });
+            EquipChipRecycleResponse protectedResponse = ReadResponsePayload<EquipChipRecycleResponse>(
+                harness,
+                protectedPacketId,
+                nameof(EquipChipRecycleResponse),
+                "EquipChipRecycle locked response");
+            AssertEqual(true, protectedResponse.Code != 0, "EquipChipRecycle locked chip rejected");
+            AssertEmptyList(protectedResponse.RewardGoodsList, "EquipChipRecycle locked rewards");
+            AssertEqual(3, character.Equips.Count, "EquipChipRecycle locked character unchanged");
+            AssertEqual(0, characterCollection.ReplaceOneCalls, "EquipChipRecycle locked character saves");
+            AssertEqual(0, inventoryCollection.ReplaceOneCalls, "EquipChipRecycle locked inventory saves");
+            if (harness.TryReadAvailablePacket("EquipChipRecycle locked unexpected push", out Packet protectedUnexpected))
+                throw new InvalidDataException($"EquipChipRecycle locked request emitted unexpected {protectedUnexpected.Type} packet.");
+
+            character.Equips[0].IsLock = false;
+            long expectedInventoryCount = 0;
+            void RecycleAndAssert(int packetId, int[] ids, int expectedReward, int expectedSaveCount, string name)
+            {
+                InvokeRegisteredRequestHandler(
+                    nameof(EquipChipRecycleRequest),
+                    harness.Session,
+                    packetId,
+                    new EquipChipRecycleRequest { ChipIds = ids.ToList() });
+                NotifyItemDataList itemPush = ReadPushPayload<NotifyItemDataList>(
+                    harness,
+                    nameof(NotifyItemDataList),
+                    $"{name} item push");
+                NotifyEquipDataList equipPush = ReadPushPayload<NotifyEquipDataList>(
+                    harness,
+                    nameof(NotifyEquipDataList),
+                    $"{name} equipment push");
+                EquipChipRecycleResponse response = ReadResponsePayload<EquipChipRecycleResponse>(
+                    harness,
+                    packetId,
+                    nameof(EquipChipRecycleResponse),
+                    $"{name} response");
+
+                AssertEqual(0, response.Code, $"{name} Code");
+                RewardGoods reward = response.RewardGoodsList.Single();
+                AssertEqual((int)RewardType.Item, reward.RewardType, $"{name} reward type");
+                AssertEqual(recycleItemId, reward.TemplateId, $"{name} reward item");
+                AssertEqual(expectedReward, reward.Count, $"{name} reward count");
+                expectedInventoryCount += expectedReward;
+                Item pushedItem = itemPush.ItemDataList.Single();
+                AssertEqual(recycleItemId, pushedItem.Id, $"{name} pushed item");
+                AssertEqual(expectedInventoryCount, pushedItem.Count, $"{name} pushed item count");
+                AssertIntegerList(
+                    ids.Select(id => (long)id).ToArray(),
+                    equipPush.DeletedEquipIdList.Select(id => (long)id).ToArray(),
+                    $"{name} deleted equipment");
+                AssertEqual(expectedSaveCount, characterCollection.ReplaceOneCalls, $"{name} character saves");
+                AssertEqual(expectedSaveCount, inventoryCollection.ReplaceOneCalls, $"{name} inventory saves");
+                if (harness.TryReadAvailablePacket($"{name} unexpected packet", out Packet unexpected))
+                    throw new InvalidDataException($"{name} emitted unexpected {unexpected.Type} packet.");
+            }
+
+            RecycleAndAssert(14_311, [(int)chipIds[0]], rewardPerChip, 1, "EquipChipRecycle one chip");
+            RecycleAndAssert(14_312, [(int)chipIds[1], (int)chipIds[2]], rewardPerChip * 2, 2, "EquipChipRecycle two chips");
+            AssertEqual(0, character.Equips.Count, "EquipChipRecycle removes recycled chips");
+            AssertEqual(expectedInventoryCount,
+                inventory.Items.Single(item => item.Id == recycleItemId).Count,
+                "EquipChipRecycle inventory reward persists in memory");
+            AssertEqual(0,
+                characterCollection.LastReplacement?.Equips.Count ?? -1,
+                "EquipChipRecycle persisted chip deletion");
+            AssertEqual(expectedInventoryCount,
+                inventoryCollection.LastReplacement?.Items.Single(item => item.Id == recycleItemId).Count ?? -1,
+                "EquipChipRecycle persisted reward count");
+            AssertEqual(0, playerCollection.ReplaceOneCalls, "EquipChipRecycle does not save Player");
+
+            long beforeSetTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            InvokeRegisteredRequestHandler(
+                nameof(EquipChipSiteAutoRecycleRequest),
+                harness.Session,
+                14_313,
+                new EquipChipSiteAutoRecycleRequest { StarList = [5, 1, 3], Days = 14 });
+            EquipChipSiteAutoRecycleResponse siteResponse = ReadResponsePayload<EquipChipSiteAutoRecycleResponse>(
+                harness,
+                14_313,
+                nameof(EquipChipSiteAutoRecycleResponse),
+                "EquipChipSiteAutoRecycle response");
+            long afterSetTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            AssertEqual(0, siteResponse.Code, "EquipChipSiteAutoRecycle Code");
+            AssertIntegerList([1, 3, 5],
+                player.EquipChipAutoRecycleSite.RecycleStar.Select(value => (long)value).ToArray(),
+                "EquipChipSiteAutoRecycle stars");
+            AssertEqual(14, player.EquipChipAutoRecycleSite.Days, "EquipChipSiteAutoRecycle days");
+            AssertEqual(true,
+                player.EquipChipAutoRecycleSite.SetRecycleTime >= beforeSetTime
+                && player.EquipChipAutoRecycleSite.SetRecycleTime <= afterSetTime,
+                "EquipChipSiteAutoRecycle set time");
+            AssertEqual(1, playerCollection.ReplaceOneCalls, "EquipChipSiteAutoRecycle player saves");
+            if (harness.TryReadAvailablePacket("EquipChipSiteAutoRecycle unexpected push", out Packet siteUnexpected))
+                throw new InvalidDataException($"EquipChipSiteAutoRecycle emitted unexpected {siteUnexpected.Type} packet.");
+
+            AscNet.Common.Database.Player reloadedPlayer =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(
+                    playerCollection.LastReplacement?.ToBson()
+                    ?? throw new InvalidDataException("EquipChipSiteAutoRecycle expected persisted Player."));
+            MethodInfo buildSiteNotify = RequiredMethod(
+                RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule"),
+                "BuildEquipChipAutoRecycleNotify",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(AscNet.Common.Database.Player)]);
+            NotifyEquipChipAutoRecycleSite reloginNotify =
+                (NotifyEquipChipAutoRecycleSite)(buildSiteNotify.Invoke(null, [reloadedPlayer])
+                    ?? throw new InvalidDataException("EquipChipSiteAutoRecycle relogin notify was nil."));
+            AssertIntegerList([1, 3, 5],
+                reloginNotify.ChipRecycleSite.RecycleStar.Select(value => (long)value).ToArray(),
+                "EquipChipSiteAutoRecycle relogin stars");
+            AssertEqual(14, reloginNotify.ChipRecycleSite.Days, "EquipChipSiteAutoRecycle relogin days");
+            AssertEqual(player.EquipChipAutoRecycleSite.SetRecycleTime,
+                reloginNotify.ChipRecycleSite.SetRecycleTime,
+                "EquipChipSiteAutoRecycle relogin set time");
+
+            byte[] settingsBeforeInvalid = player.ToBson();
+            InvokeRegisteredRequestHandler(
+                nameof(EquipChipSiteAutoRecycleRequest),
+                harness.Session,
+                14_314,
+                new EquipChipSiteAutoRecycleRequest { StarList = [1, 1], Days = 2 });
+            EquipChipSiteAutoRecycleResponse invalidSiteResponse =
+                ReadResponsePayload<EquipChipSiteAutoRecycleResponse>(
+                    harness,
+                    14_314,
+                    nameof(EquipChipSiteAutoRecycleResponse),
+                    "EquipChipSiteAutoRecycle invalid response");
+            AssertEqual(true, invalidSiteResponse.Code != 0, "EquipChipSiteAutoRecycle invalid rejected");
+            AssertEqual(Convert.ToHexString(settingsBeforeInvalid),
+                Convert.ToHexString(player.ToBson()),
+                "EquipChipSiteAutoRecycle invalid preserves Player");
+            AssertEqual(1, playerCollection.ReplaceOneCalls, "EquipChipSiteAutoRecycle invalid player saves");
+            if (harness.TryReadAvailablePacket("EquipChipSiteAutoRecycle invalid unexpected push", out Packet invalidSiteUnexpected))
+                throw new InvalidDataException($"EquipChipSiteAutoRecycle invalid emitted unexpected {invalidSiteUnexpected.Type} packet.");
+        }
+
         private static void ValidateInventoryEquipCompatibility()
         {
             List<EquipTable> currentEquipRows = TableReaderV2.Parse<EquipTable>();
@@ -23026,23 +23238,47 @@ namespace AscNet.Test
             const int legacySettlePacketId = 13_223;
             const int malformedSettlePacketId = 13_224;
             const int overflowSettlePacketId = 13_225;
+            const int nextBattlePreFightPacketId = 13_226;
             StageTable stage = TableReaderV2.Parse<StageTable>()
                 .Where(row => row.StageId >= 10_000_000 && row.RobotId.Count == 0)
                 .OrderBy(row => row.StageId)
                 .First();
-            CharacterTable[] characterRows = TableReaderV2.Parse<CharacterTable>()
-                .Where(row => row.Type == 1)
+            List<FashionTable> fashionRows = TableReaderV2.Parse<FashionTable>();
+            IGrouping<int, FashionTable> randomFashionGroup = fashionRows
+                .GroupBy(row => row.CharacterId)
+                .Where(group => group.Count() >= 2)
+                .First(group => TableReaderV2.Parse<CharacterTable>()
+                    .Any(characterRow => characterRow.Id == group.Key && characterRow.Type == 1));
+            CharacterTable randomFashionCharacter = TableReaderV2.Parse<CharacterTable>()
+                .Single(row => row.Id == randomFashionGroup.Key);
+            CharacterTable[] characterRows =
+            [
+                randomFashionCharacter,
+                .. TableReaderV2.Parse<CharacterTable>()
+                    .Where(row => row.Type == 1 && row.Id != randomFashionCharacter.Id)
+                    .OrderBy(row => row.Id)
+                    .Take(2)
+            ];
+            FashionTable[] randomFashionRows = randomFashionGroup
                 .OrderBy(row => row.Id)
-                .Take(3)
+                .Take(2)
                 .ToArray();
-            if (characterRows.Length != 3)
-                throw new InvalidDataException("FightRestart compatibility requires three playable characters.");
 
             AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
             character.Characters = characterRows
                 .Select(row => CreateLoginAccountCompatibilityCharacter(
                     (uint)row.Id,
                     (uint)Math.Max(0, row.DefaultNpcFashtionId)))
+                .ToList();
+            character.Characters[0].FashionId = (uint)randomFashionRows[0].Id;
+            character.Characters[0].RandomFashion = true;
+            character.Fashions = randomFashionRows
+                .Select(row => new FashionList
+                {
+                    Id = row.Id,
+                    IsRandom = true,
+                    WeaponFashionId = 0
+                })
                 .ToList();
             using LoopbackSessionHarness harness = new(
                 character,
@@ -23076,6 +23312,10 @@ namespace AscNet.Test
             AssertEqual(preFightData.FightId, activeFight.FightId, "FightRestartRequest setup active FightId");
             AssertEqual(true, preFightData.FightId <= int.MaxValue,
                 "FightRestartRequest setup newly issued FightId stays positive Int32");
+            uint firstRandomFashionId = BattleFashionId(preFightData, "first random coating");
+            AssertEqual((uint)randomFashionRows[1].Id, firstRandomFashionId,
+                "PreFight selects the only alternate random coating");
+            var firstRandomFashionRoll = harness.Session.RandomFashionRolls[(uint)randomFashionCharacter.Id];
 
             for (int restartIndex = 0; restartIndex < 8; restartIndex++)
             {
@@ -23094,6 +23334,8 @@ namespace AscNet.Test
                 AssertEqual(activeFight.FightId, harness.Session.fight?.FightId ?? 0, "FightRestartRequest active fight Id");
                 AssertEqual(true, ReferenceEquals(activeFight.PreFight, harness.Session.fight?.PreFight), "FightRestartRequest active PreFight state");
                 AssertNoExtraPacket(harness, "FightRestartRequest active fight");
+                AssertEqual(firstRandomFashionRoll, harness.Session.RandomFashionRolls[(uint)randomFashionCharacter.Id],
+                    "FightRestart preserves random coating roll");
             }
 
             uint mismatchedFightId = activeFight.FightId == uint.MaxValue
@@ -23186,6 +23428,35 @@ namespace AscNet.Test
             AssertEqual(false, legacyLoss.Settle.IsWin, "FightSettleRequest signed legacy loss");
             AssertEqual(null, harness.Session.fight, "FightSettleRequest signed legacy loss clears active fight");
             AssertNoExtraPacket(harness, "FightSettleRequest signed legacy FightId");
+            InvokeRegisteredRequestHandler(
+                nameof(PreFightRequest),
+                harness.Session,
+                nextBattlePreFightPacketId,
+                preFightRequest);
+            PreFightResponse nextBattle = ReadResponsePayload<PreFightResponse>(
+                harness,
+                nextBattlePreFightPacketId,
+                nameof(PreFightResponse),
+                "PreFight after concluded battle");
+            uint nextRandomFashionId = BattleFashionId(nextBattle.FightData, "next random coating");
+            AssertEqual((uint)randomFashionRows[0].Id, nextRandomFashionId,
+                "concluded battle rerolls random coating");
+            AssertEqual((uint)randomFashionRows[0].Id,
+                harness.Session.RandomFashionRolls[(uint)randomFashionCharacter.Id].FashionId,
+                "next battle publishes rerolled coating");
+
+            static uint BattleFashionId(
+                PreFightResponse.PreFightResponseFightData fightData,
+                string name)
+            {
+                System.Collections.IDictionary npc = RequiredDynamicMap(
+                    (object?)fightData.RoleData.Single().NpcData[0],
+                    $"{name} NpcData");
+                System.Collections.IDictionary battleCharacter = RequiredDynamicMap(
+                    RequiredDynamicValue(npc, "Character", $"{name} NpcData"),
+                    $"{name} Character");
+                return (uint)RequiredDynamicInteger(battleCharacter, "FashionId", $"{name} Character");
+            }
             AssertMalformedSettle(malformedSettlePacketId, [0xc1], "malformed wire");
 
             System.Buffers.ArrayBufferWriter<byte> overflowWireBuffer = new();

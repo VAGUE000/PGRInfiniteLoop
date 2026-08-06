@@ -7,6 +7,7 @@ using AscNet.Table.V2.share.attrib;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.equip;
+using AscNet.Table.V2.share.config;
 using AscNet.Table.V2.share.item;
 using MessagePack;
 
@@ -283,6 +284,32 @@ namespace AscNet.GameServer.Handlers
         public int Level;
         public int Exp;
         public int SuccessTimes;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipChipRecycleRequest
+    {
+        public List<int> ChipIds = new();
+    }
+
+    [MessagePackObject(true)]
+    public class EquipChipRecycleResponse
+    {
+        public int Code;
+        public List<RewardGoods> RewardGoodsList { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
+    public class EquipChipSiteAutoRecycleRequest
+    {
+        public List<int> StarList = new();
+        public int Days;
+    }
+
+    [MessagePackObject(true)]
+    public class EquipChipSiteAutoRecycleResponse
+    {
+        public int Code;
     }
 
     [MessagePackObject(true)]
@@ -1837,6 +1864,165 @@ namespace AscNet.GameServer.Handlers
             equip.WeaponOverrunData ??= new();
             equip.WeaponOverrunData.ActiveSuits ??= [];
             return equip;
+        }
+
+        [RequestPacketHandler("EquipChipSiteAutoRecycleRequest")]
+        public static void EquipChipSiteAutoRecycleRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipChipSiteAutoRecycleRequest request = packet.Deserialize<EquipChipSiteAutoRecycleRequest>();
+            if (request.StarList is null
+                || request.StarList.Distinct().Count() != request.StarList.Count
+                || request.StarList.Any(star => star is < 1 or > 5)
+                || request.Days is not (0 or 1 or 3 or 14))
+            {
+                session.SendResponse(new EquipChipSiteAutoRecycleResponse { Code = 1 }, packet.Id);
+                return;
+            }
+
+            session.player.EquipChipAutoRecycleSite = new ChipRecycleSite
+            {
+                RecycleStar = request.StarList.Order().ToList(),
+                Days = request.Days,
+                SetRecycleTime = (int)Math.Min(
+                    int.MaxValue,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            };
+            session.player.Save();
+            session.SendResponse(new EquipChipSiteAutoRecycleResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("EquipChipRecycleRequest")]
+        public static void EquipChipRecycleRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipChipRecycleRequest request = packet.Deserialize<EquipChipRecycleRequest>();
+            if (!TryBuildChipRecycle(
+                    session,
+                    request.ChipIds,
+                    out List<EquipData> chips,
+                    out int recycleItemId,
+                    out int recycleItemCount))
+            {
+                session.SendResponse(new EquipChipRecycleResponse { Code = 1 }, packet.Id);
+                return;
+            }
+
+            NotifyItemDataList notifyItems = new();
+            if (recycleItemCount > 0)
+                notifyItems.ItemDataList.Add(session.inventory.Do(recycleItemId, recycleItemCount));
+
+            NotifyEquipDataList notifyEquips = new();
+            foreach (EquipData chip in chips)
+            {
+                if (!session.character.Equips.Remove(chip))
+                    throw new InvalidDataException($"Validated recyclable chip {chip.Id} disappeared before consumption.");
+                notifyEquips.DeletedEquipIdList.Add(chip.Id);
+            }
+
+            session.character.Save();
+            session.inventory.Save();
+            if (notifyItems.ItemDataList.Count > 0)
+                session.SendPush(notifyItems);
+            session.SendPush(notifyEquips);
+            session.SendResponse(new EquipChipRecycleResponse
+            {
+                RewardGoodsList = recycleItemCount > 0
+                    ? [new RewardGoods
+                    {
+                        RewardType = (int)RewardType.Item,
+                        TemplateId = recycleItemId,
+                        Count = recycleItemCount
+                    }]
+                    : []
+            }, packet.Id);
+        }
+
+        private static bool TryBuildChipRecycle(
+            Session session,
+            List<int>? chipIds,
+            out List<EquipData> chips,
+            out int recycleItemId,
+            out int recycleItemCount)
+        {
+            chips = [];
+            recycleItemId = 0;
+            recycleItemCount = 0;
+            if (chipIds is not { Count: > 0 } || chipIds.Distinct().Count() != chipIds.Count)
+                return false;
+
+            Dictionary<string, string> config = TableReaderV2.Parse<ConfigTable>()
+                .Where(row => row.Key is "EquipRecycleItemId" or "EquipRecycleItemPercent" or "EquipExpInheritPercent")
+                .ToDictionary(row => row.Key, row => row.Value);
+            if (!int.TryParse(config.GetValueOrDefault("EquipRecycleItemId"), NumberStyles.Integer, CultureInfo.InvariantCulture, out recycleItemId)
+                || !int.TryParse(config.GetValueOrDefault("EquipRecycleItemPercent"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int recyclePercent)
+                || !int.TryParse(config.GetValueOrDefault("EquipExpInheritPercent"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int inheritPercent)
+                || recyclePercent < 0
+                || inheritPercent < 0
+                || !Inventory.IsValidClientItemId(recycleItemId))
+            {
+                return false;
+            }
+
+            IGrouping<uint, EquipData>[] equipGroups = session.character.Equips
+                .GroupBy(equip => equip.Id)
+                .ToArray();
+            if (equipGroups.Any(group => group.Count() != 1))
+                return false;
+            Dictionary<uint, EquipData> equipsById = equipGroups
+                .ToDictionary(group => group.Key, group => group.Single());
+            List<EquipTable> equipTables = TableReaderV2.Parse<EquipTable>();
+            decimal totalExp = 0;
+            foreach (int chipId in chipIds)
+            {
+                EquipData? chip = chipId > 0 && equipsById.TryGetValue((uint)chipId, out EquipData? found)
+                    ? found
+                    : null;
+                EquipTable? template = chip is null
+                    ? null
+                    : equipTables.FirstOrDefault(row => row.Id == chip.TemplateId);
+                if (chip is null
+                    || template is null
+                    || template.Site <= 0
+                    || template.Star > 5
+                    || !Character.IsOwnableEquipTemplate(template)
+                    || chip.CharacterId != 0
+                    || chip.Level != 1
+                    || chip.Exp != 0
+                    || chip.Breakthrough != 0
+                    || chip.IsLock
+                    || chip.ResonanceInfo is { Count: > 0 }
+                    || chip.UnconfirmedResonanceInfo is { Count: > 0 }
+                    || chip.AwakeSlotList is { Count: > 0 }
+                    || session.player.IsEquipInTeamPrefab(chip.Id))
+                {
+                    return false;
+                }
+
+                EquipBreakThroughTable? breakthrough = Character.ResolveEquipBreakThrough(chip.TemplateId, chip.Breakthrough);
+                EquipLevelUpTemplate? level = breakthrough is null
+                    ? null
+                    : Character.equipLevelUpTemplates.FirstOrDefault(row =>
+                        row.TemplateId == breakthrough.LevelUpTemplateId
+                        && row.Level == chip.Level);
+                if (breakthrough is null || level is null)
+                    return false;
+                totalExp += ((decimal)chip.Exp + level.AllExp) * inheritPercent / 100m + breakthrough.Exp;
+                chips.Add(chip);
+            }
+
+            decimal countDecimal = decimal.Floor(totalExp * recyclePercent / 100m);
+            int itemId = recycleItemId;
+            ItemTable? recycleItem = TableReaderV2.Parse<ItemTable>()
+                .FirstOrDefault(row => row.Id == itemId);
+            long currentCount = session.inventory.Items
+                .FirstOrDefault(item => item.Id == itemId)?.Count ?? 0;
+            if (countDecimal > int.MaxValue
+                || currentCount > Inventory.GetMaxCount(recycleItem) - (long)countDecimal)
+            {
+                return false;
+            }
+
+            recycleItemCount = (int)countDecimal;
+            return true;
         }
 
         [RequestPacketHandler("EquipDecomposeRequest")]

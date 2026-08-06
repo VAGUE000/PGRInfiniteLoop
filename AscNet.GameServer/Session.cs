@@ -30,6 +30,7 @@ namespace AscNet.GameServer
         public bool PendingBigWorldStartFightNotify;
         public readonly Dictionary<(uint EquipId, int Slot), ResonanceInfo> PendingEquipResonances = new();
         public int? AppliedTeamPrefabId;
+        public readonly Dictionary<uint, (uint FashionId, int WeaponFashionId)> RandomFashionRolls = new();
         public readonly Logger log;
         private int startState;
         private int packetNo = 0;

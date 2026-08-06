@@ -1097,6 +1097,8 @@ internal static partial class Program
         flowCharacter.Characters = [new CharacterData { Id = 1 }, new CharacterData { Id = 2 }, new CharacterData { Id = 3 }];
         MethodInfo prepare = RequiredMethod(Payload("TransfiniteModule"), "PrepareLogin",
             BindingFlags.Static | BindingFlags.NonPublic, [typeof(Player), typeof(long)]);
+        MethodInfo isRetryPreFight = RequiredMethod(Payload("TransfiniteModule"), "IsRetryPreFight",
+            BindingFlags.Static | BindingFlags.NonPublic, [typeof(Session), typeof(uint)]);
         using MongoCollectionOverride flowMongo = MongoCollectionOverride.InstallForDailySignInCompatibility(
             out RecordingMongoCollectionProxy<Player> flowPlayerCollection,
             out RecordingMongoCollectionProxy<Character> flowCharacterCollection,
@@ -1413,6 +1415,9 @@ internal static partial class Program
         AssertEqual(0, settled.Code, "Transfinite winning FightSettle code");
         AssertEqual(true, flowPlayer.Transfinite!.BattleInfo!.LastResult is not null,
             "Transfinite FightSettle persists typed pending LastResult");
+        AssertEqual(true,
+            (bool)(isRetryPreFight.Invoke(null, [flowHarness.Session, (uint)fightStageId]) ?? false),
+            "Transfinite pending same-stage PreFight preserves random coating");
         AssertEqual(0, flowHarness.Session.stage?.Stages.Count ?? 0,
             "Transfinite never writes generic Stage progress");
         InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_284,
@@ -1427,6 +1432,9 @@ internal static partial class Program
             flowHarness, 46_185, nameof(TransfiniteConfirmBattleResultResponse), "Transfinite pending give-up");
         AssertEqual(0, gaveUp.Code, "Transfinite pending give-up code");
         AssertEqual(null, flowPlayer.Transfinite!.BattleInfo!.LastResult, "Transfinite give-up clears only pending result");
+        AssertEqual(false,
+            (bool)(isRetryPreFight.Invoke(null, [flowHarness.Session, (uint)fightStageId]) ?? true),
+            "Transfinite confirmed result rerolls random coating on the next battle");
         AssertEqual(0, flowPlayer.Transfinite.BattleInfo.StageProgressIndex, "Transfinite give-up preserves progress");
         AssertEqual(0, flowPlayer.Transfinite.BattleInfo.StageInfo.Count, "Transfinite give-up preserves stage history");
         AssertEqual(0, flowPlayer.MissionProgress.ConditionCounters

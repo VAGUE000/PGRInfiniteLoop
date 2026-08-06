@@ -608,6 +608,12 @@ namespace AscNet.Common.Database
         [BsonElement("equip_chip_groups")]
         public List<EquipChipGroupData> EquipChipGroups { get; set; } = new();
 
+        [BsonElement("equip_chip_auto_recycle_site")]
+        public ChipRecycleSite EquipChipAutoRecycleSite { get; set; } = new()
+        {
+            RecycleStar = [1, 2, 3, 4]
+        };
+
         [BsonElement("vote_alarm_data")]
         public List<VoteAlarmData> VoteAlarmData { get; set; } = new();
 
