@@ -9948,6 +9948,47 @@ namespace AscNet.Test
             AssertEqual(true, voteGroup.VoteDic.Values.All(value => Convert.ToInt64(value) == 0),
                 "GetVoteGroupListResponse neutral vote counts");
 
+            int selectedVoteId = checked((int)configuredVoteIds[0]);
+            InvokeRegisteredRequestHandler(
+                nameof(AddVoteRequest),
+                harness.Session,
+                11_107,
+                new AddVoteRequest { VoteId = selectedVoteId });
+            NotifyVoteData votePush = ReadPushPayload<NotifyVoteData>(
+                harness,
+                nameof(NotifyVoteData),
+                "AddVoteRequest selection push");
+            AssertEqual(1, votePush.VoteAlarmDic.Count, "AddVoteRequest push selection count");
+            AssertEqual(voteGroup.Id, votePush.VoteAlarmDic[0].Id, "AddVoteRequest push group");
+            AssertEqual(selectedVoteId, votePush.VoteAlarmDic[0].SelectId, "AddVoteRequest push selection");
+            AssertEqual(0, votePush.VoteAlarmDic[0].AlarmCount, "AddVoteRequest push alarm count");
+            AssertEqual(0, ReadResponsePayload<AddVoteResponse>(
+                harness, 11_107, nameof(AddVoteResponse), "AddVoteRequest response").Code,
+                "AddVoteResponse Code");
+            AscNet.Common.Database.Player persistedVotePlayer =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(
+                    player.ToBson());
+            AssertEqual(selectedVoteId, persistedVotePlayer.VoteAlarmData.Single().SelectId,
+                "AddVoteRequest selection survives BSON round-trip");
+
+            InvokeRegisteredRequestHandler(
+                nameof(AddVoteRequest),
+                harness.Session,
+                11_108,
+                new AddVoteRequest { VoteId = checked((int)configuredVoteIds[^1]) });
+            AssertEqual(20043005, ReadResponsePayload<AddVoteResponse>(
+                harness, 11_108, nameof(AddVoteResponse), "AddVoteRequest duplicate response").Code,
+                "AddVoteRequest duplicate group rejection");
+
+            InvokeRegisteredRequestHandler(
+                nameof(AddVoteRequest),
+                harness.Session,
+                11_109,
+                new AddVoteRequest { VoteId = int.MaxValue });
+            AssertEqual(20043006, ReadResponsePayload<AddVoteResponse>(
+                harness, 11_109, nameof(AddVoteResponse), "AddVoteRequest unknown response").Code,
+                "AddVoteRequest unknown vote rejection");
+
             const int guildDetailPacketId = 11_007;
             InvokeRegisteredRequestHandler(
                 nameof(GuildListDetailRequest),
@@ -14130,6 +14171,12 @@ namespace AscNet.Test
                     "Team prefab compatibility requires a weapon skill shared by two character-specific pools.");
             }
             int[] resonanceSkills = [sharedResonanceSkill, sharedResonanceSkill];
+            int alternateResonanceSkill = weaponSkillPools
+                .Where(pool =>
+                    pool.PoolId == resonancePoolId
+                    && pool.CharacterId == characterFixtures[0].Character.Id)
+                .SelectMany(pool => pool.SkillId)
+                .First(skillId => skillId > 0 && skillId != sharedResonanceSkill);
             int overrunSuitId = awarenessRow.SuitId;
             int[] presetTagIds = TableReaderV2.Parse<TeamPrefabTagTable>()
                 .OrderBy(row => row.Id)
@@ -14646,6 +14693,11 @@ namespace AscNet.Test
             foreach (ResonanceInfo resonance in weaponEquip.ResonanceInfo)
                 resonance.TemplateId = 0;
             weaponEquip.WeaponOverrunData.ChoseSuit = 0;
+            int[] canonicalResonanceSkills = weaponEquip.ResonanceInfo
+                .OrderBy(resonance => resonance.Slot)
+                .Select(resonance => resonance.TemplateId)
+                .ToArray();
+            int canonicalOverrunSuitId = weaponEquip.WeaponOverrunData.ChoseSuit;
             character.Equips.AddRange([previousWeapon, previousAwareness, untouchedAwareness]);
 
             PartnerData secondPartner = character.Partners.Single(partner => partner.Id == 802);
@@ -14661,6 +14713,7 @@ namespace AscNet.Test
                 [2, 3],
                 "apply with equipment and partner conflicts");
             AssertAppliedState(character, "first apply");
+            AssertBattlePresetEffects(71_037, resonanceSkills, overrunSuitId, "first preset battle");
             AssertEqual(0, displacedPartner.CharacterId, "first apply clears displaced partner");
             AssertEqual(secondCharacterId, previousWeapon.CharacterId, "first apply swaps previous weapon");
             AssertEqual(0, previousAwareness.CharacterId, "first apply removes previous awareness");
@@ -14682,6 +14735,29 @@ namespace AscNet.Test
                     (characterCollection.LastReplacement
                         ?? throw new InvalidDataException("Team prefab apply did not persist Character.")).ToBson());
             AssertAppliedState(persistedAppliedCharacter, "persisted apply");
+
+            TeamPrefabData alternatePreset = Clone(nonEmpty, data =>
+            {
+                data.TeamId = 4;
+                TeamPrefabEquipEntry weaponPreset = data.EquipData[1]!.EquipDataDict[equipRows[0].Site];
+                weaponPreset.ResonanceDict![1] = alternateResonanceSkill;
+                weaponPreset.WeaponOverrunSuitId = 0;
+            });
+            player.TeamPrefabs.Add(alternatePreset);
+            DispatchApplyAndAssert(4, 71_038, [801, 802], [2], "alternate preset apply");
+            AssertAppliedState(character, "alternate preset apply");
+            AssertBattlePresetEffects(
+                71_039,
+                [alternateResonanceSkill, resonanceSkills[1]],
+                0,
+                "alternate preset battle");
+            RejectApply(int.MaxValue, 71_040, "failed apply retains selected preset");
+            AssertBattlePresetEffects(
+                71_041,
+                [alternateResonanceSkill, resonanceSkills[1]],
+                0,
+                "failed apply retained battle preset");
+            player.TeamPrefabs.Remove(alternatePreset);
 
             int chipGroupPlayerSaves = playerCollection.ReplaceOneCalls;
             InvokeRegisteredRequestHandler(
@@ -14778,7 +14854,6 @@ namespace AscNet.Test
                     harness.Session,
                     packetId,
                     new TeamPrefabApplyRequest { TeamId = teamId });
-
                 NotifyPartnerDataList partnerPush = ReadPushPayload<NotifyPartnerDataList>(
                     harness,
                     nameof(NotifyPartnerDataList),
@@ -14816,6 +14891,77 @@ namespace AscNet.Test
                     Convert.ToHexString(inventoryStateBefore),
                     Convert.ToHexString(harness.Session.inventory.ToBson()),
                     $"{name} does not mutate Inventory");
+                AssertNoExtraPacket(name);
+            }
+
+            void AssertBattlePresetEffects(
+                int packetId,
+                IReadOnlyList<int> expectedResonanceSkills,
+                int expectedOverrunSuitId,
+                string name)
+            {
+                InvokeRegisteredRequestHandler(
+                    nameof(PreFightRequest),
+                    harness.Session,
+                    packetId,
+                    new PreFightRequest
+                    {
+                        PreFightData = new()
+                        {
+                            StageId = 10_101_101,
+                            CardIds = nonEmpty.TeamData
+                                .OrderBy(member => member.Key)
+                                .Select(member => (uint)member.Value)
+                                .ToList(),
+                            RobotIds = []
+                        }
+                    });
+                PreFightResponse response = ReadResponsePayload<PreFightResponse>(
+                    harness,
+                    packetId,
+                    nameof(PreFightResponse),
+                    $"{name} response");
+                AssertEqual(0, response.Code, $"{name} Code");
+                object npcValue = response.FightData.RoleData
+                    .Single(role => role.Id == player.PlayerData.Id)
+                    .NpcData[0];
+                System.Collections.IDictionary npc = RequiredDynamicMap(npcValue, $"{name} NpcData");
+                System.Collections.IDictionary weapon = RequiredDynamicObjectList(npc, "Equips", $"{name} equips")
+                    .Select(value => RequiredDynamicMap(value, $"{name} equip"))
+                    .Single(equip => RequiredDynamicInteger(equip, "Id", $"{name} equip") == 7_001);
+                List<long> actualResonanceSkills = RequiredDynamicObjectList(
+                        weapon,
+                        "ResonanceInfo",
+                        $"{name} resonance")
+                    .Select(value => RequiredDynamicMap(value, $"{name} resonance"))
+                    .OrderBy(resonance => RequiredDynamicInteger(resonance, "Slot", $"{name} resonance"))
+                    .Select(resonance => (long)RequiredDynamicInteger(
+                        resonance,
+                        "TemplateId",
+                        $"{name} resonance"))
+                    .ToList();
+                AssertIntegerList(
+                    expectedResonanceSkills.Select(value => (long)value).ToArray(),
+                    actualResonanceSkills,
+                    $"{name} resonance selections");
+                System.Collections.IDictionary overrun = RequiredDynamicMap(
+                    RequiredDynamicValue(weapon, "WeaponOverrunData", $"{name} weapon"),
+                    $"{name} overrun");
+                AssertEqual(
+                    expectedOverrunSuitId,
+                    RequiredDynamicInteger(overrun, "ChoseSuit", $"{name} overrun"),
+                    $"{name} overrun selection");
+                AssertIntegerList(
+                    canonicalResonanceSkills.Select(value => (long)value).ToArray(),
+                    weaponEquip.ResonanceInfo
+                        .OrderBy(resonance => resonance.Slot)
+                        .Select(resonance => (long)resonance.TemplateId)
+                        .ToArray(),
+                    $"{name} preserves global resonance");
+                AssertEqual(
+                    canonicalOverrunSuitId,
+                    weaponEquip.WeaponOverrunData.ChoseSuit,
+                    $"{name} preserves global overrun");
                 AssertNoExtraPacket(name);
             }
 
@@ -14879,16 +15025,16 @@ namespace AscNet.Test
                     actual.Equips.Single(equip => equip.Id == 7_005).CharacterId,
                     $"{name} untouched awareness carrier");
                 AssertIntegerList(
-                    resonanceSkills.Select(value => (long)value).ToArray(),
+                    canonicalResonanceSkills.Select(value => (long)value).ToArray(),
                     actual.Equips.Single(equip => equip.Id == 7_001).ResonanceInfo
                         .OrderBy(value => value.Slot)
                         .Select(value => (long)value.TemplateId)
                         .ToArray(),
-                    $"{name} weapon resonance selections");
+                    $"{name} preserves global weapon resonance");
                 AssertEqual(
-                    overrunSuitId,
+                    canonicalOverrunSuitId,
                     actual.Equips.Single(equip => equip.Id == 7_001).WeaponOverrunData.ChoseSuit,
-                    $"{name} weapon overrun selection");
+                    $"{name} preserves global weapon overrun");
 
                 PartnerData appliedFirstPartner = actual.Partners.Single(partner => partner.Id == 801);
                 PartnerData appliedSecondPartner = actual.Partners.Single(partner => partner.Id == 802);

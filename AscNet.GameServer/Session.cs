@@ -29,6 +29,7 @@ namespace AscNet.GameServer
         public bool PendingBigWorldLoadCompleteXRpc;
         public bool PendingBigWorldStartFightNotify;
         public readonly Dictionary<(uint EquipId, int Slot), ResonanceInfo> PendingEquipResonances = new();
+        public int? AppliedTeamPrefabId;
         public readonly Logger log;
         private int startState;
         private int packetNo = 0;

@@ -1110,9 +1110,6 @@ internal static partial class Program
         TransfiniteRegionTable flowLoginRegion = TableReaderV2.Parse<TransfiniteRegionTable>()
             .Single(region => region.RegionId == flowState.RegionId);
         HashSet<int> allowedGroups = [flowState.StageGroupId];
-        allowedGroups.UnionWith(TableReaderV2.Parse<TransfiniteRotateGroupTable>()
-            .Single(rotate => rotate.RotateGroupId == flowLoginRegion.RotateGroupId)
-            .StageGroupId);
         allowedGroups.UnionWith(TableReaderV2.Parse<TransfiniteIslandTable>()
             .Where(island => island.Id == flowLoginRegion.IslandId)
             .SelectMany(island => island.StageGroupId));
@@ -1203,62 +1200,20 @@ internal static partial class Program
         invalidPosition.CaptainPos = 2;
         AssertRejectedTeam(invalidPosition, "Transfinite captain selects nonzero slot");
 
-        int alternateAllowedGroup = allowedGroups.First(groupId => groupId != flowGroup);
+        int inactiveRotationGroup = TableReaderV2.Parse<TransfiniteRotateGroupTable>()
+            .Single(rotate => rotate.RotateGroupId == flowLoginRegion.RotateGroupId)
+            .StageGroupId.First(groupId => groupId != flowGroup);
         InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_186,
             new TransfiniteSetTeamRequest
             {
-                StageGroupId = alternateAllowedGroup,
+                StageGroupId = inactiveRotationGroup,
                 TeamInfo = Team(1, 2, 0),
                 ResetStageIndex = true
-            });
-        AssertEqual(0, ReadResponsePayload<TransfiniteSetTeamResponse>(
-            flowHarness, 46_186, nameof(TransfiniteSetTeamResponse), "Transfinite alternate rotation SetTeam").Code,
-            "Transfinite alternate rotation SetTeam code");
-        int alternateStageId = TableReaderV2.Parse<TransfiniteStageGroupTable>()
-            .Single(group => group.StageGroupId == alternateAllowedGroup).StageId[0];
-        InvokeRegisteredRequestHandler(nameof(PreFightRequest), flowHarness.Session, 46_189,
-            new PreFightRequest { PreFightData = new() { StageId = (uint)alternateStageId, CardIds = [], RobotIds = [] } });
-        AssertEqual(0, ReadResponsePayload<PreFightResponse>(
-            flowHarness, 46_189, nameof(PreFightResponse), "Transfinite alternate rotation PreFight").Code,
-            "Transfinite alternate rotation PreFight code");
-        flowHarness.Session.fight = null;
-        flowState.BattleInfo = new TransfiniteBattleState
-        {
-            StageGroupId = alternateAllowedGroup,
-            StartStageProgress = 1,
-            TeamInfo = new TransfiniteTeamState
-            {
-                CharacterIdList = [1, 2, 0],
-                CaptainPos = 1,
-                FirstFightPos = 1
-            },
-            Result = new TransfiniteBattleResultState()
-        };
-        InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_187,
-            new TransfiniteSetTeamRequest
-            {
-                StageGroupId = flowGroup,
-                TeamInfo = Team(1, 2, 0),
-                ResetStageIndex = false
             });
         AssertEqual(20201006, ReadResponsePayload<TransfiniteSetTeamResponse>(
-            flowHarness, 46_187, nameof(TransfiniteSetTeamResponse), "Transfinite guarded group switch").Code,
-            "Transfinite group switch requires reset");
-        AssertEqual(alternateAllowedGroup, flowState.BattleInfo.StageGroupId,
-            "Transfinite guarded group switch preserves active group");
-
-        InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_188,
-            new TransfiniteSetTeamRequest
-            {
-                StageGroupId = flowGroup,
-                TeamInfo = Team(1, 2, 0),
-                ResetStageIndex = true
-            });
-        TransfiniteSetTeamResponse switchedTeam = ReadResponsePayload<TransfiniteSetTeamResponse>(
-            flowHarness, 46_188, nameof(TransfiniteSetTeamResponse), "Transfinite reset group switch");
-        AssertEqual(0, switchedTeam.Code, "Transfinite reset group switch code");
-        AssertEqual(flowGroup, switchedTeam.BattleInfo?.StageGroupId, "Transfinite reset group switch target");
-        AssertEqual(0, switchedTeam.BattleInfo?.StageProgressIndex, "Transfinite reset group switch progress");
+            flowHarness, 46_186, nameof(TransfiniteSetTeamResponse), "Transfinite inactive rotation SetTeam").Code,
+            "Transfinite inactive rotation SetTeam rejection");
+        AssertEqual(null, flowState.BattleInfo, "Transfinite inactive rotation preserves progress");
 
         InvokeRegisteredRequestHandler(nameof(TransfiniteSetTeamRequest), flowHarness.Session, 46_182,
             new TransfiniteSetTeamRequest { StageGroupId = flowGroup, TeamInfo = Team(1, 2, 0), ResetStageIndex = true });

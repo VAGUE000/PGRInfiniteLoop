@@ -267,6 +267,7 @@ namespace AscNet.GameServer.Handlers
                 session.character = Character.FromUid(player.PlayerData.Id);
                 session.stage = Stage.FromUid(player.PlayerData.Id);
                 session.inventory = Inventory.FromUid(player.PlayerData.Id);
+                session.AppliedTeamPrefabId = null;
 
                 session.SendResponse(new LoginResponse
                 {
@@ -1430,7 +1431,7 @@ namespace AscNet.GameServer.Handlers
             if (transfiniteData.TransfiniteData is not null)
                 session.SendPush(transfiniteData);
             SendEmptyStartupPush(session, "NotifyTurntableData");
-            SendEmptyStartupPush(session, "NotifyVoteData");
+            session.SendPush(new NotifyVoteData { VoteAlarmDic = session.player.VoteAlarmData });
             SendEmptyStartupPush(session, "NotifyWheelchairManualActivity");
             SendEmptyStartupPush(session, "NotifyTheatre4ActivityData");
             SendEmptyStartupPush(session, "NotifyRestaurantData");

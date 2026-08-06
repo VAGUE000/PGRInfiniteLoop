@@ -608,6 +608,9 @@ namespace AscNet.Common.Database
         [BsonElement("equip_chip_groups")]
         public List<EquipChipGroupData> EquipChipGroups { get; set; } = new();
 
+        [BsonElement("vote_alarm_data")]
+        public List<VoteAlarmData> VoteAlarmData { get; set; } = new();
+
         [BsonElement("fuben_main_line_data")]
         public FubenMainLineData FubenMainLineData { get; set; } = new();
 

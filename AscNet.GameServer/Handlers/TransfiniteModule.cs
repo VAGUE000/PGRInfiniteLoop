@@ -291,7 +291,7 @@ internal static class TransfiniteModule
         if (!CommitRotateReceipt(s, state, ToPlayerReceipt(receipt))) { s.SendResponse(new TransfiniteGetRotateSettleInfoResponse { Code = StageGroupCfgNotFound }, p.Id); return; }
         if (changed.Count > 0) s.SendPush(new NotifyItemDataList { ItemDataList = changed }); s.SendResponse(ToResponse(receipt), p.Id);
     }
-    private static bool IsAllowedGroup(TransfiniteState state, int groupId) => Regions.Value.SingleOrDefault(x => x.RegionId == state.RegionId) is { } region && (Rotates.Value.TryGetValue(region.RotateGroupId, out var rotate) && rotate.StageGroupId.Contains(groupId) || Islands.Value.Any(x => x.Id == region.IslandId && x.StageGroupId.Contains(groupId)));
+    private static bool IsAllowedGroup(TransfiniteState state, int groupId) => state.StageGroupId == groupId || Regions.Value.SingleOrDefault(x => x.RegionId == state.RegionId) is { } region && Islands.Value.Any(x => x.Id == region.IslandId && x.StageGroupId.Contains(groupId));
     internal static bool ApplyPreFight(Session s, PreFightRequest.PreFightRequestPreFightData r, out int code)
     {
         if (!IsStage(r.StageId)) { code = 0; return false; }

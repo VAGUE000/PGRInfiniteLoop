@@ -1993,9 +1993,18 @@ namespace AscNet.Common.MsgPack
 
 
     [global::MessagePack.MessagePackObject(true)]
+    public class VoteAlarmData
+    {
+        public Int32 Id { get; set; }
+        public Int32 SelectId { get; set; }
+        public Int32 AlarmCount { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
     public class NotifyVoteData
     {
-        public List<dynamic> VoteAlarmDic { get; set; } = new();
+        public List<VoteAlarmData> VoteAlarmDic { get; set; } = new();
     }
 
 

@@ -609,7 +609,7 @@ namespace AscNet.GameServer.Handlers
                 }
                 else
                 {
-                    equips = session.character.Equips.Where(x => x.CharacterId == cardId);
+                    equips = BuildTeamPrefabFightEquips(session, cardId);
                 }
 
                 PartnerData? partner = session.character.Partners.FirstOrDefault(x => x.CharacterId == characterData.Id);
@@ -1242,8 +1242,8 @@ namespace AscNet.GameServer.Handlers
                 }
             }
 
-            foreach ((int characterId, EquipData equip, TeamPrefabEquipEntry preset) in equipPlan)
-                ApplyTeamPrefabEquip(session.character, characterId, equip, preset);
+            foreach ((int characterId, EquipData equip, _) in equipPlan)
+                ApplyTeamPrefabEquip(session.character, characterId, equip);
 
             HashSet<int> targetCharacterIds = teamPrefab.TeamData.Values
                 .Where(characterId => characterId > 0)
@@ -1292,6 +1292,7 @@ namespace AscNet.GameServer.Handlers
             }
 
             session.character.Save();
+            session.AppliedTeamPrefabId = teamPrefab.TeamId;
             session.SendPush(new NotifyPartnerDataList
             {
                 PartnerDataList = session.character.Partners
@@ -1313,8 +1314,7 @@ namespace AscNet.GameServer.Handlers
         private static void ApplyTeamPrefabEquip(
             AscNet.Common.Database.Character character,
             int characterId,
-            EquipData selectedEquip,
-            TeamPrefabEquipEntry preset)
+            EquipData selectedEquip)
         {
             EquipTable selectedRow = EquipRowsById.Value[selectedEquip.TemplateId];
             int previousCharacterId = selectedEquip.CharacterId;
@@ -1327,18 +1327,79 @@ namespace AscNet.GameServer.Handlers
                 previousEquip.CharacterId = selectedRow.Site == 0 ? previousCharacterId : 0;
 
             selectedEquip.CharacterId = characterId;
-            if (selectedRow.Site != 0)
-                return;
-
-            foreach ((int slot, int skillId) in preset.ResonanceDict ?? [])
-            {
-                ResonanceInfo? resonance = selectedEquip.ResonanceInfo
-                    .LastOrDefault(value => value.Slot == slot);
-                if (resonance is not null)
-                    resonance.TemplateId = skillId;
-            }
-            selectedEquip.WeaponOverrunData.ChoseSuit = preset.WeaponOverrunSuitId;
         }
+
+        private static IReadOnlyList<EquipData> BuildTeamPrefabFightEquips(
+            Session session,
+            uint characterId)
+        {
+            List<EquipData> ownedEquips = session.character.Equips
+                .Where(equip => equip.CharacterId == characterId)
+                .ToList();
+            TeamPrefabData? teamPrefab = session.AppliedTeamPrefabId is int teamId
+                ? (session.player.TeamPrefabs ?? []).FirstOrDefault(prefab => prefab.TeamId == teamId)
+                : null;
+            int position = teamPrefab?.TeamData
+                .FirstOrDefault(member => member.Value == characterId).Key ?? 0;
+            if (position <= 0
+                || teamPrefab?.EquipData.TryGetValue(position, out TeamPrefabEquipData? presetEquips) != true
+                || presetEquips is null)
+            {
+                return ownedEquips;
+            }
+
+            Dictionary<uint, TeamPrefabEquipEntry> presetsByEquipId = presetEquips.EquipDataDict.Values
+                .Where(preset => preset.EquipId > 0)
+                .ToDictionary(preset => preset.EquipId);
+            return ownedEquips.Select(equip =>
+            {
+                if (!presetsByEquipId.TryGetValue(equip.Id, out TeamPrefabEquipEntry? preset))
+                    return equip;
+
+                EquipData battleEquip = CloneEquipData(equip);
+                foreach ((int slot, int skillId) in preset.ResonanceDict ?? [])
+                {
+                    ResonanceInfo? resonance = battleEquip.ResonanceInfo
+                        .LastOrDefault(value => value.Slot == slot);
+                    if (resonance is not null)
+                        resonance.TemplateId = skillId;
+                }
+                battleEquip.WeaponOverrunData.ChoseSuit = preset.WeaponOverrunSuitId;
+                return battleEquip;
+            }).ToList();
+        }
+
+        private static EquipData CloneEquipData(EquipData equip) => new()
+        {
+            Id = equip.Id,
+            TemplateId = equip.TemplateId,
+            CharacterId = equip.CharacterId,
+            Level = equip.Level,
+            Exp = equip.Exp,
+            Breakthrough = equip.Breakthrough,
+            ResonanceInfo = equip.ResonanceInfo.Select(CloneResonanceInfo).ToList(),
+            UnconfirmedResonanceInfo = equip.UnconfirmedResonanceInfo.Select(CloneResonanceInfo).ToList(),
+            AwakeSlotList = equip.AwakeSlotList.ToList(),
+            IsLock = equip.IsLock,
+            CreateTime = equip.CreateTime,
+            WeaponOverrunData = new()
+            {
+                Level = equip.WeaponOverrunData.Level,
+                ActiveSuits = equip.WeaponOverrunData.ActiveSuits.ToList(),
+                ChoseSuit = equip.WeaponOverrunData.ChoseSuit
+            },
+            IsRecycle = equip.IsRecycle
+        };
+
+        private static ResonanceInfo CloneResonanceInfo(ResonanceInfo resonance) => new()
+        {
+            Slot = resonance.Slot,
+            Type = resonance.Type,
+            CharacterId = resonance.CharacterId,
+            TemplateId = resonance.TemplateId,
+            UseItemId = resonance.UseItemId,
+            IsUseEquip = resonance.IsUseEquip
+        };
 
         private static void ApplyTeamPrefabPartnerSkills(
             AscNet.Common.Database.Character character,
