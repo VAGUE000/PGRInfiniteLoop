@@ -267,6 +267,9 @@ namespace AscNet.GameServer.Handlers
                 session.character = Character.FromUid(player.PlayerData.Id);
                 session.stage = Stage.FromUid(player.PlayerData.Id);
                 session.inventory = Inventory.FromUid(player.PlayerData.Id);
+                if (player.NormalizeEquipReferences(session.character.Equips.Select(equip => equip.Id).ToHashSet()))
+                    player.Save();
+
                 session.AppliedTeamPrefabId = null;
 
                 session.SendResponse(new LoginResponse
@@ -338,6 +341,8 @@ namespace AscNet.GameServer.Handlers
                     session.character = Character.FromUid(player.PlayerData.Id);
                     session.stage = Stage.FromUid(player.PlayerData.Id);
                     session.inventory = Inventory.FromUid(player.PlayerData.Id);
+                    if (player.NormalizeEquipReferences(session.character.Equips.Select(equip => equip.Id).ToHashSet()))
+                        player.Save();
                 }
 
                 session.player = player;
@@ -1020,15 +1025,6 @@ namespace AscNet.GameServer.Handlers
 
         private static readonly IReadOnlyDictionary<string, byte[]> SupportedStartupPushPayloads = new Dictionary<string, byte[]>
         {
-            ["NotifyLoginAwarenessInfo"] = SerializeStartupPayload(new Dictionary<string, object?>
-            {
-                ["AwarenessInfo"] = new Dictionary<string, object?>
-                {
-                    ["ChapterRecords"] = Array.Empty<object>(),
-                    ["ChallengeRecords"] = Array.Empty<object>(),
-                    ["TeamRecords"] = Array.Empty<object>()
-                }
-            }),
             ["NotifyDlcFightCharacterId"] = SerializeStartupPayload(new Dictionary<string, object?>
             {
                 ["FightCharacterId"] = 0
@@ -1309,7 +1305,7 @@ namespace AscNet.GameServer.Handlers
                 EquipGuideData = new()
             });
             session.SendPush(BuildNotifyArchiveLoginData(session.player));
-            SendEmptyStartupPush(session, "NotifyLoginAwarenessInfo");
+            session.SendPush(AwarenessModule.BuildLoginData(session.player));
             session.SendPush(notifyChatLoginData);
             session.SendPush(new NotifySocialData());
             session.SendPush(notifyTaskData);

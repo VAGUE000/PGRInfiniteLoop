@@ -503,6 +503,73 @@ namespace AscNet.Common.Database
                 TeamPrefabs = normalized;
             return changed;
         }
+        public bool NormalizeEquipReferences(IReadOnlySet<uint> ownedEquipIds)
+        {
+            bool changed = NormalizeTeamPrefabs();
+            foreach (TeamPrefabData teamPrefab in TeamPrefabs)
+            {
+                if (teamPrefab.EquipData is null)
+                {
+                    teamPrefab.EquipData = new();
+                    changed = true;
+                    continue;
+                }
+
+                foreach (TeamPrefabEquipData? equipData in teamPrefab.EquipData.Values)
+                {
+                    if (equipData is null)
+                        continue;
+
+                    if (equipData.EquipDataDict is null)
+                    {
+                        equipData.EquipDataDict = new();
+                        changed = true;
+                        continue;
+                    }
+
+                    foreach (int position in equipData.EquipDataDict
+                        .Where(entry => entry.Value is null || !ownedEquipIds.Contains(entry.Value.EquipId))
+                        .Select(entry => entry.Key)
+                        .ToList())
+                    {
+                        equipData.EquipDataDict.Remove(position);
+                        changed = true;
+                    }
+                }
+            }
+
+            List<EquipChipGroupData> chipGroups = (EquipChipGroups ?? [])
+                .OfType<EquipChipGroupData>()
+                .ToList();
+            if (EquipChipGroups is null || chipGroups.Count != EquipChipGroups.Count)
+            {
+                EquipChipGroups = chipGroups;
+                changed = true;
+            }
+
+            foreach (EquipChipGroupData group in EquipChipGroups)
+            {
+                if (group.ChipIdList is null)
+                {
+                    group.ChipIdList = new();
+                    changed = true;
+                    continue;
+                }
+
+                int removed = group.ChipIdList.RemoveAll(chipId =>
+                    chipId <= 0 || !ownedEquipIds.Contains((uint)chipId));
+                changed |= removed > 0;
+            }
+
+            return changed;
+        }
+
+        public bool IsEquipInChipGroup(uint equipId)
+        {
+            return equipId != 0 && (EquipChipGroups ?? []).Any(group =>
+                group?.ChipIdList?.Any(chipId => chipId > 0 && (uint)chipId == equipId) == true);
+        }
+
 
         public bool IsEquipInTeamPrefab(uint equipId)
         {

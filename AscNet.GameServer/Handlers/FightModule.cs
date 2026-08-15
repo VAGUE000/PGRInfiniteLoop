@@ -496,6 +496,16 @@ namespace AscNet.GameServer.Handlers
                 req.PreFightData.ChallengeCount = 1;
                 req.PreFightData.CardIds = [];
             }
+            if (AwarenessModule.ApplyPreFight(session, req.PreFightData, out int awarenessCode))
+            {
+                if (awarenessCode != 0)
+                {
+                    rsp.Code = awarenessCode;
+                    session.SendResponse(rsp, packet.Id);
+                    return;
+                }
+            }
+
 
             if (BossInshotModule.ValidatePreFightRequest(session, req.PreFightData, out int bossInshotValidationCode)
                 && bossInshotValidationCode != 0)
@@ -926,6 +936,8 @@ namespace AscNet.GameServer.Handlers
                 TeamName = req.TeamData.TeamName,
                 TeamData = req.TeamData.TeamData
             };
+            session.AppliedTeamPrefabId = null;
+
 
             session.SendResponse(new TeamSetTeamResponse(), packet.Id);
         }
@@ -1718,7 +1730,8 @@ namespace AscNet.GameServer.Handlers
                     if (equip.EquipId == 0)
                         continue;
                     if (source.TeamData[position] == 0
-                        || !ownedEquipsById.TryGetValue(equip.EquipId, out EquipData? ownedEquip))
+                        || !ownedEquipsById.TryGetValue(equip.EquipId, out EquipData? ownedEquip)
+                        || ownedEquip.IsRecycle)
                     {
                         failure = TeamPrefabValidationFailure.UnknownEquip;
                         return false;
@@ -1973,7 +1986,6 @@ namespace AscNet.GameServer.Handlers
                     ? resonanceRow.WeaponSkillPoolId.ElementAtOrDefault(resonanceSlot - 1)
                     : 0;
                 ResonanceInfo? ownedResonance = (ownedEquip.ResonanceInfo ?? [])
-                    .Concat(ownedEquip.UnconfirmedResonanceInfo ?? [])
                     .LastOrDefault(value => value.Slot == resonanceSlot);
                 int resonanceCharacterId = ownedResonance?.CharacterId > 0
                     ? ownedResonance.CharacterId
@@ -2228,6 +2240,17 @@ namespace AscNet.GameServer.Handlers
             {
                 session.fight = null;
                 session.SendResponse(transfiniteResponse, packet.Id);
+                return;
+            }
+            if (AwarenessModule.TrySettle(session, req.Result, out FightSettleResponse awarenessResponse))
+            {
+                session.fight = null;
+                if (awarenessResponse.Code == 0 && awarenessResponse.Settle?.IsWin == true)
+                {
+                    session.SendPush(new NotifyArchiveMonsterRecord());
+                    TaskModule.SendTaskSync(session);
+                }
+                session.SendResponse(awarenessResponse, packet.Id);
                 return;
             }
             if (!req.Result.IsForceExit

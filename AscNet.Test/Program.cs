@@ -89,6 +89,11 @@ namespace AscNet.Test
                     ValidateDormCompatibility();
                     return;
                 }
+                if (args.Contains("--awareness-compat-only"))
+                {
+                    ValidateAwarenessCompatibility();
+                    return;
+                }
                 if (args.Contains("--transfinite-compat-only"))
                 {
                     ValidateTransfiniteCompatibility();
@@ -3704,7 +3709,76 @@ namespace AscNet.Test
             ValidateLoginAccountNoticeFixtures();
             ValidateSyncReadGameNoticeRequestCompatibility();
             ValidateLoginHomeStateResponseCompatibility();
+            ValidateEquipReferenceNormalizationCompatibility();
         }
+
+        private static void ValidateEquipReferenceNormalizationCompatibility()
+        {
+            TeamPrefabEquipEntry retained = new()
+            {
+                EquipId = 7,
+                ResonanceDict = new() { [1] = 2 },
+                WeaponOverrunSuitId = 3
+            };
+            byte[] retainedBefore = retained.ToBson();
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(88_004);
+            player.TeamPrefabs =
+            [
+                new TeamPrefabData
+                {
+                    TeamId = 1,
+                    TeamName = "retain metadata",
+                    EquipData = new()
+                    {
+                        [1] = new TeamPrefabEquipData
+                        {
+                            EquipDataDict = new()
+                            {
+                                [1] = retained,
+                                [2] = new TeamPrefabEquipEntry { EquipId = 8 }
+                            }
+                        }
+                    }
+                }
+            ];
+            player.EquipChipGroups =
+            [
+                new EquipChipGroupData
+                {
+                    GroupId = 1,
+                    Name = "retain metadata",
+                    CharacterId = 2,
+                    ChipIdList = [7, 8]
+                }
+            ];
+
+            AssertEqual(true, player.NormalizeEquipReferences(new HashSet<uint> { 7 }),
+                "equip reference normalization removes stale references");
+            AssertEqual(true, player.IsEquipInTeamPrefab(7), "equip reference normalization retains valid prefab equip");
+            AssertEqual(false, player.IsEquipInTeamPrefab(8), "equip reference normalization removes stale prefab equip");
+            AssertEqual(true, player.IsEquipInChipGroup(7), "equip chip-group predicate finds actual membership");
+            AssertEqual(false, player.IsEquipInChipGroup(8), "equip chip-group predicate excludes stale membership");
+            AssertEqual(false, player.IsEquipInChipGroup(0), "equip chip-group predicate excludes zero");
+            AssertEqual("retain metadata", player.TeamPrefabs.Single().TeamName,
+                "equip reference normalization preserves prefab metadata");
+            AssertEqual("retain metadata", player.EquipChipGroups.Single().Name,
+                "equip reference normalization preserves chip-group metadata");
+            AssertEqual(Convert.ToHexString(retainedBefore),
+                Convert.ToHexString(player.TeamPrefabs.Single().EquipData[1]!.EquipDataDict[1].ToBson()),
+                "equip reference normalization preserves valid prefab entry bytes");
+            AssertIntegerList([7], player.EquipChipGroups.Single().ChipIdList.Select(id => (long)id).ToArray(),
+                "equip reference normalization retains valid chip ids");
+            AssertEqual(false, player.NormalizeEquipReferences(new HashSet<uint> { 7 }),
+                "equip reference normalization is idempotent");
+
+            player.TeamPrefabs = null!;
+            player.EquipChipGroups = null!;
+            AssertEqual(true, player.NormalizeEquipReferences(new HashSet<uint>()),
+                "equip reference normalization initializes null collections");
+            AssertEqual(0, player.TeamPrefabs.Count, "equip reference normalization initializes prefab list");
+            AssertEqual(0, player.EquipChipGroups.Count, "equip reference normalization initializes chip-group list");
+        }
+
 
         private static void ValidateLoginAccountNotifyLoginShape()
         {
@@ -14631,6 +14705,9 @@ namespace AscNet.Test
                 data.EquipData[1]!.EquipDataDict[equipRows[0].Site == 0 ? 1 : 0] =
                     new TeamPrefabEquipEntry { EquipId = 7_001 };
             }), 71_006, "mismatched equip slot");
+            weaponEquip.IsRecycle = true;
+            Reject(Clone(nonEmpty, _ => { }), 71_031, "recycled equipment");
+            weaponEquip.IsRecycle = false;
             Reject(Clone(nonEmpty, data => data.SwitchSkills[1] = int.MaxValue), 71_007, "unknown switch skill");
             Reject(Clone(nonEmpty, data => data.PartnerData[1]!.SkillData![1] = [int.MaxValue]),
                 71_008, "unknown partner skill");
@@ -14663,6 +14740,13 @@ namespace AscNet.Test
             {
                 data.EquipData[1]!.EquipDataDict[equipRows[0].Site].ResonanceDict![1] = int.MaxValue;
             }), 71_016, "unknown resonance skill");
+            ResonanceInfo activeResonance = weaponEquip.ResonanceInfo.Single(value => value.Slot == 1);
+            weaponEquip.ResonanceInfo.Remove(activeResonance);
+            weaponEquip.UnconfirmedResonanceInfo.Add(activeResonance);
+            Reject(Clone(nonEmpty, _ => { }), 71_024, "unconfirmed resonance slot");
+            weaponEquip.UnconfirmedResonanceInfo.Remove(activeResonance);
+            weaponEquip.ResonanceInfo.Add(activeResonance);
+
             ResonanceInfo secondResonance = weaponEquip.ResonanceInfo.Single(value => value.Slot == 2);
             int secondResonanceCharacterId = secondResonance.CharacterId;
             secondResonance.CharacterId = characterFixtures[0].Character.Id;
@@ -14698,7 +14782,7 @@ namespace AscNet.Test
             previousAwareness.CharacterId = firstCharacterId;
             untouchedAwareness.CharacterId = firstCharacterId;
             foreach (ResonanceInfo resonance in weaponEquip.ResonanceInfo)
-                resonance.TemplateId = 0;
+                resonance.TemplateId = alternateResonanceSkill;
             weaponEquip.WeaponOverrunData.ChoseSuit = 0;
             int[] canonicalResonanceSkills = weaponEquip.ResonanceInfo
                 .OrderBy(resonance => resonance.Slot)
@@ -14721,6 +14805,34 @@ namespace AscNet.Test
                 "apply with equipment and partner conflicts");
             AssertAppliedState(character, "first apply");
             AssertBattlePresetEffects(71_037, resonanceSkills, overrunSuitId, "first preset battle");
+            harness.Session.AppliedTeamPrefabId = 3;
+            InvokeRegisteredRequestHandler(
+                nameof(EquipResonanceRequest),
+                harness.Session,
+                71_042,
+                new EquipResonanceRequest
+                {
+                    EquipId = (int)weaponEquip.Id,
+                    Slots = [1],
+                    SelectSkillIds = [resonanceSkills[0]],
+                    SelectType = EquipResonanceType.WeaponSkill,
+                    CharacterId = firstCharacterId
+                });
+            AssertEqual(0, ReadResponsePayload<EquipResonanceResponse>(
+                harness,
+                71_042,
+                nameof(EquipResonanceResponse),
+                "regular resonance after preset").Code,
+                "regular resonance after preset Code");
+            AssertEqual(true, harness.Session.AppliedTeamPrefabId is null,
+                "regular resonance clears applied preset");
+            canonicalResonanceSkills[0] = resonanceSkills[0];
+            AssertBattlePresetEffects(
+                71_043,
+                canonicalResonanceSkills,
+                canonicalOverrunSuitId,
+                "regular resonance battle after preset");
+
             AssertEqual(0, displacedPartner.CharacterId, "first apply clears displaced partner");
             AssertEqual(secondCharacterId, previousWeapon.CharacterId, "first apply swaps previous weapon");
             AssertEqual(0, previousAwareness.CharacterId, "first apply removes previous awareness");
@@ -14765,8 +14877,28 @@ namespace AscNet.Test
                 0,
                 "failed apply retained battle preset");
             player.TeamPrefabs.Remove(alternatePreset);
-
             int chipGroupPlayerSaves = playerCollection.ReplaceOneCalls;
+            EquipData recycledAwareness = character.Equips.Single(equip => equip.Id == 7_002);
+            recycledAwareness.IsRecycle = true;
+            InvokeRegisteredRequestHandler(
+                nameof(EquipAddChipGroupRequest),
+                harness.Session,
+                71_079,
+                new EquipAddChipGroupRequest
+                {
+                    Name = "Recycled",
+                    ChipIds = [7_002],
+                    CharacterId = 0
+                });
+            AssertEqual(20021012, ReadResponsePayload<EquipAddChipGroupResponse>(
+                harness, 71_079, nameof(EquipAddChipGroupResponse), "recycled memory preset add").Code,
+                "recycled memory preset add Code");
+            AssertEqual(chipGroupPlayerSaves, playerCollection.ReplaceOneCalls,
+                "recycled memory preset add does not persist Player");
+            recycledAwareness.IsRecycle = false;
+
+
+            chipGroupPlayerSaves = playerCollection.ReplaceOneCalls;
             InvokeRegisteredRequestHandler(
                 nameof(EquipAddChipGroupRequest),
                 harness.Session,
@@ -18461,6 +18593,106 @@ namespace AscNet.Test
 
             player.TeamPrefabs = [];
 
+            (int cappedItemId, long cappedItemCount) = expectedItemCounts
+                .Select(pair => (pair.Key, (long)AscNet.Common.Database.Inventory.GetMaxCount(itemRowsById[pair.Key]) - pair.Value + 1))
+                .First(pair => pair.Item2 >= 0);
+
+            foreach ((string Name, Action Apply, Action Clear) fixture in new[]
+            {
+                (
+                    "chip-group",
+                    (Action)(() => player.EquipChipGroups =
+                    [
+                        new EquipChipGroupData { GroupId = 1, ChipIdList = [(int)sourceEquipId] }
+                    ]),
+                    (Action)(() => player.EquipChipGroups = [])),
+                (
+                    "active-resonance",
+                    (Action)(() => character.Equips.Single().ResonanceInfo = [new ResonanceInfo { Slot = 1 }]),
+                    (Action)(() => character.Equips.Single().ResonanceInfo = [])),
+                (
+                    "effective-cap",
+                    (Action)(() => inventory.Items.Add(new Item { Id = cappedItemId, Count = cappedItemCount })),
+                    (Action)(() => inventory.Items.Clear())),
+                (
+                    "pending-resonance",
+                    (Action)(() => harness.Session.PendingEquipResonances[(sourceEquipId, 1)] = new ResonanceInfo { Slot = 1 }),
+                    (Action)(() => harness.Session.PendingEquipResonances.Clear()))
+            })
+            {
+                fixture.Apply();
+                byte[] characterBefore = character.ToBson();
+                byte[] inventoryBefore = inventory.ToBson();
+                int characterSavesBefore = characterCollection.ReplaceOneCalls;
+                int inventorySavesBefore = inventoryCollection.ReplaceOneCalls;
+                InvokeRegisteredRequestHandler(
+                    nameof(EquipDecomposeRequest),
+                    harness.Session,
+                    protectedPacketId + 10 + characterSavesBefore + inventorySavesBefore,
+                    new EquipDecomposeRequest { EquipIds = [(int)sourceEquipId] });
+                EquipDecomposeResponse rejected = ReadResponsePayload<EquipDecomposeResponse>(
+                    harness,
+                    protectedPacketId + 10 + characterSavesBefore + inventorySavesBefore,
+                    nameof(EquipDecomposeResponse),
+                    $"EquipDecompose {fixture.Name} response");
+                AssertEqual(true, rejected.Code != 0, $"EquipDecompose {fixture.Name} rejected");
+                AssertEqual(Convert.ToHexString(characterBefore), Convert.ToHexString(character.ToBson()),
+                    $"EquipDecompose {fixture.Name} preserves Character");
+                AssertEqual(Convert.ToHexString(inventoryBefore), Convert.ToHexString(inventory.ToBson()),
+                    $"EquipDecompose {fixture.Name} preserves Inventory");
+                AssertEqual(characterSavesBefore, characterCollection.ReplaceOneCalls,
+                    $"EquipDecompose {fixture.Name} does not save Character");
+                AssertEqual(inventorySavesBefore, inventoryCollection.ReplaceOneCalls,
+                    $"EquipDecompose {fixture.Name} does not save Inventory");
+                if (harness.TryReadAvailablePacket($"EquipDecompose {fixture.Name} unexpected push", out Packet unexpected))
+                    throw new InvalidDataException($"EquipDecompose {fixture.Name} emitted unexpected {unexpected.Type} packet.");
+                fixture.Clear();
+            }
+
+            foreach ((string Name, RecordingMongoCollectionProxy<AscNet.Common.Database.Character>? CharacterFailure,
+                RecordingMongoCollectionProxy<AscNet.Common.Database.Inventory>? InventoryFailure, int PacketId) failure in new[]
+            {
+                ("character-save", characterCollection, (RecordingMongoCollectionProxy<AscNet.Common.Database.Inventory>?)null, 14_320),
+                ("inventory-save", (RecordingMongoCollectionProxy<AscNet.Common.Database.Character>?)null, inventoryCollection, 14_321)
+            })
+            {
+                byte[] characterBefore = character.ToBson();
+                byte[] inventoryBefore = inventory.ToBson();
+                int characterSavesBefore = characterCollection.ReplaceOneCalls;
+                int inventorySavesBefore = inventoryCollection.ReplaceOneCalls;
+
+                if (failure.CharacterFailure is not null)
+                    failure.CharacterFailure.ThrowOnReplaceOne = true;
+                if (failure.InventoryFailure is not null)
+                    failure.InventoryFailure.ThrowOnReplaceOne = true;
+                InvokeRegisteredRequestHandler(
+                    nameof(EquipDecomposeRequest),
+                    harness.Session,
+                    failure.PacketId,
+                    new EquipDecomposeRequest { EquipIds = [(int)sourceEquipId] });
+                if (failure.CharacterFailure is not null)
+                    failure.CharacterFailure.ThrowOnReplaceOne = false;
+                if (failure.InventoryFailure is not null)
+                    failure.InventoryFailure.ThrowOnReplaceOne = false;
+                EquipDecomposeResponse failed = ReadResponsePayload<EquipDecomposeResponse>(
+                    harness, failure.PacketId, nameof(EquipDecomposeResponse),
+                    $"EquipDecompose {failure.Name} response");
+                AssertEqual(true, failed.Code != 0, $"EquipDecompose {failure.Name} rejected");
+                AssertEqual(Convert.ToHexString(characterBefore), Convert.ToHexString(character.ToBson()),
+                    $"EquipDecompose {failure.Name} restores Character");
+                AssertEqual(Convert.ToHexString(inventoryBefore), Convert.ToHexString(inventory.ToBson()),
+                    $"EquipDecompose {failure.Name} restores Inventory");
+                AssertEqual(characterSavesBefore + (failure.CharacterFailure is null ? 2 : 1),
+                    characterCollection.ReplaceOneCalls, $"EquipDecompose {failure.Name} character persistence");
+                AssertEqual(inventorySavesBefore + (failure.InventoryFailure is null ? 0 : 1),
+                    inventoryCollection.ReplaceOneCalls, $"EquipDecompose {failure.Name} inventory persistence");
+                if (harness.TryReadAvailablePacket($"EquipDecompose {failure.Name} unexpected push", out Packet unexpected))
+                    throw new InvalidDataException($"EquipDecompose {failure.Name} emitted unexpected {unexpected.Type} packet.");
+            }
+
+
+            int characterSavesBeforeSuccess = characterCollection.ReplaceOneCalls;
+            int inventorySavesBeforeSuccess = inventoryCollection.ReplaceOneCalls;
 
             const int packetId = 14_301;
             InvokeRegisteredRequestHandler(
@@ -18529,8 +18761,10 @@ namespace AscNet.Test
             if (returnedEquipIds.Contains(sourceEquipId))
                 throw new InvalidDataException("EquipDecompose equipment push: returned equipment UID reused the deleted source UID.");
 
-            AssertEqual(1, characterCollection.ReplaceOneCalls, "EquipDecompose persisted character saves");
-            AssertEqual(1, inventoryCollection.ReplaceOneCalls, "EquipDecompose persisted inventory saves");
+            AssertEqual(characterSavesBeforeSuccess + 1, characterCollection.ReplaceOneCalls,
+                "EquipDecompose persisted character saves");
+            AssertEqual(inventorySavesBeforeSuccess + 1, inventoryCollection.ReplaceOneCalls,
+                "EquipDecompose persisted inventory saves");
             AscNet.Common.Database.Character persistedCharacter = characterCollection.LastReplacement
                 ?? throw new InvalidDataException("EquipDecompose: expected the updated Character to be persisted.");
             AscNet.Common.Database.Inventory persistedInventory = inventoryCollection.LastReplacement
@@ -18588,6 +18822,46 @@ namespace AscNet.Test
             }
             if (harness.TryReadAvailablePacket("EquipDecomposeRequest repeat unexpected push", out Packet unexpectedPacket))
                 throw new InvalidDataException($"EquipDecompose repeat deleted source request emitted unexpected {unexpectedPacket.Type} packet.");
+
+            AscNet.Common.Database.Character batchCharacter = CreateDrawCompatibilityCharacter(playerId + 1);
+            uint[] batchIds = Enumerable.Range(0, 101).Select(offset => 60_000u + (uint)offset).ToArray();
+            batchCharacter.Equips =
+            [
+                .. batchIds.Select(id => new EquipData
+                {
+                    Id = id,
+                    TemplateId = (uint)sourceTemplate.Id,
+                    CharacterId = 0,
+                    Level = 1,
+                    Exp = sourceExp,
+                    Breakthrough = 0,
+                    ResonanceInfo = [],
+                    UnconfirmedResonanceInfo = [],
+                    AwakeSlotList = [],
+                    WeaponOverrunData = new()
+                })
+            ];
+            using LoopbackSessionHarness batchHarness = new(
+                batchCharacter,
+                CreateDrawCompatibilityPlayer(playerId + 1),
+                CreateDrawCompatibilityInventory(playerId + 1, []),
+                "equip-decompose-batch-compat-test");
+            InvokeRegisteredRequestHandler(
+                nameof(EquipDecomposeRequest),
+                batchHarness.Session,
+                14_302,
+                new EquipDecomposeRequest { EquipIds = batchIds.Select(id => (int)id).ToList() });
+            _ = ReadPushPayload<NotifyItemDataList>(batchHarness, nameof(NotifyItemDataList),
+                "EquipDecompose 101-source item push");
+            NotifyEquipDataList batchEquipPush = ReadPushPayload<NotifyEquipDataList>(
+                batchHarness, nameof(NotifyEquipDataList), "EquipDecompose 101-source equipment push");
+            EquipDecomposeResponse batchResponse = ReadResponsePayload<EquipDecomposeResponse>(
+                batchHarness, 14_302, nameof(EquipDecomposeResponse), "EquipDecompose 101-source response");
+            AssertEqual(0, batchResponse.Code, "EquipDecompose 101-source Code");
+            AssertEqual(101, batchEquipPush.DeletedEquipIdList.Count,
+                "EquipDecompose 101-source deleted count");
+            AssertEqual(0, batchCharacter.Equips.Count(equip => batchIds.Contains(equip.Id)),
+                "EquipDecompose 101-source deletes every source");
         }
 
         private static void ValidateEquipChipRecycleCompatibility()
@@ -19171,6 +19445,23 @@ namespace AscNet.Test
                 BindingFlags.Instance | BindingFlags.NonPublic);
             MethodInfo loginHandler = GetRegisteredRequestHandlerMethod("LoginRequest");
             AssertCallPrecedes(loginHandler, characterFromUid, doLogin, "LoginRequestHandler normalized character load before login pushes");
+            MethodInfo normalizeEquipReferences = RequiredMethod(
+                typeof(AscNet.Common.Database.Player),
+                nameof(AscNet.Common.Database.Player.NormalizeEquipReferences),
+                BindingFlags.Instance | BindingFlags.Public,
+                [typeof(IReadOnlySet<uint>)]);
+            AssertCallPrecedes(loginHandler, characterFromUid, normalizeEquipReferences,
+                "LoginRequestHandler reconciles references after character normalization");
+            AssertCallResultFeedsConditionalBranch(loginHandler, normalizeEquipReferences,
+                "LoginRequestHandler persists reconciled references only when changed");
+            AssertCallPrecedes(loginHandler, normalizeEquipReferences, doLogin,
+                "LoginRequestHandler reconciles references before login pushes");
+            MethodInfo playerSave = RequiredMethod(
+                typeof(AscNet.Common.Database.Player),
+                nameof(AscNet.Common.Database.Player.Save),
+                BindingFlags.Instance | BindingFlags.Public);
+            AssertCallPrecedes(loginHandler, normalizeEquipReferences, playerSave,
+                "LoginRequestHandler persists reconciled references");
 
             MethodInfo tableParse = RequiredMethod(
                 typeof(TableReaderV2),
@@ -28488,6 +28779,7 @@ namespace AscNet.Test
                 "EquipPutOnRequestHandler memory rows with same Type and different Site do not share a slot");
 
             AssertEquipPutOnUnequipsEveryExistingWeaponAndNotifies(equipPutOnHandler, currentEquipRows);
+            AssertEquipPutOnValidationAndLockPersistence(currentEquipRows);
         }
 
         private static (EquipTable Target, EquipTable SameSite, EquipTable DifferentSite) SelectMemorySlotRows(IReadOnlyList<EquipTable> currentEquipRows)
@@ -28529,13 +28821,12 @@ namespace AscNet.Test
             EquipTable targetWeapon = weaponRows[0];
             EquipTable firstPreviousWeapon = weaponRows.First(weapon => weapon.Id != targetWeapon.Id);
             EquipTable secondPreviousWeapon = weaponRows.First(weapon => weapon.Id != targetWeapon.Id && weapon.Id != firstPreviousWeapon.Id);
-            int? mismatchedRequestSite = currentEquipRows
-                .Select(equip => (int?)equip.Site)
-                .FirstOrDefault(site => site != targetWeapon.Site);
-            int requestSite = mismatchedRequestSite
-                ?? (targetWeapon.Site == int.MaxValue ? int.MinValue : targetWeapon.Site + 1);
-
-            const int characterId = 1021001;
+            CharacterTable targetCharacterRow = TableReaderV2.Parse<CharacterTable>()
+                .FirstOrDefault(character => character.EquipType == targetWeapon.Type
+                    && (targetWeapon.CharacterId == 0 || targetWeapon.CharacterId == character.Id))
+                ?? throw new InvalidDataException("EquipPutOnRequestHandler behavior: expected a character compatible with the selected weapon.");
+            int characterId = targetCharacterRow.Id;
+            int requestSite = targetWeapon.Site;
             EquipData firstPreviousEquip = CreateEquipPutOnTestEquip(92001, firstPreviousWeapon, characterId);
             EquipData secondPreviousEquip = CreateEquipPutOnTestEquip(92002, secondPreviousWeapon, characterId);
             EquipData targetEquip = CreateEquipPutOnTestEquip(92003, targetWeapon, characterId: 0);
@@ -28544,12 +28835,20 @@ namespace AscNet.Test
             AscNet.Common.Database.Character character = new()
             {
                 Uid = 92000,
-                Characters = [],
+                Characters = [new CharacterData { Id = (uint)characterId }],
                 Equips = [firstPreviousEquip, secondPreviousEquip, targetEquip, otherCharacterWeapon],
                 Fashions = []
             };
 
+            using MongoCollectionOverride mongoOverride =
+                MongoCollectionOverride.InstallForDailySignInCompatibility(
+                    out _,
+                    out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> characterCollection,
+                    out _);
+
             using LoopbackSessionHarness harness = new(character);
+            harness.Session.AppliedTeamPrefabId = 3;
+
             EquipPutOnRequest request = new()
             {
                 CharacterId = characterId,
@@ -28573,9 +28872,17 @@ namespace AscNet.Test
             }
 
             AssertEqual(characterId, targetEquip.CharacterId, "EquipPutOnRequestHandler behavior equipped requested Type 1 weapon");
-            AssertEqual(0, firstPreviousEquip.CharacterId, "EquipPutOnRequestHandler behavior unequipped first previous Type 1 weapon despite mismatched request Site");
-            AssertEqual(0, secondPreviousEquip.CharacterId, "EquipPutOnRequestHandler behavior unequipped second previous Type 1 weapon despite mismatched request Site");
+            AssertEqual(0, firstPreviousEquip.CharacterId, "EquipPutOnRequestHandler behavior unequipped first previous Type 1 weapon");
+            AssertEqual(0, secondPreviousEquip.CharacterId, "EquipPutOnRequestHandler behavior unequipped second previous Type 1 weapon");
             AssertEqual(characterId + 1, otherCharacterWeapon.CharacterId, "EquipPutOnRequestHandler behavior does not unequip another character's Type 1 weapon");
+            AssertEqual(true, harness.Session.AppliedTeamPrefabId is null,
+                "EquipPutOnRequestHandler clears applied preset");
+            AssertEqual(1, characterCollection.ReplaceOneCalls,
+                "EquipPutOnRequestHandler persists equipment assignments");
+            AssertEqual(characterId,
+                characterCollection.LastReplacement?.Equips.Single(equip => equip.Id == targetEquip.Id).CharacterId ?? 0,
+                "EquipPutOnRequestHandler persisted target assignment");
+
 
             Dictionary<uint, EquipTable> tableById = currentEquipRows.ToDictionary(equip => (uint)equip.Id);
             int remainingWeaponCount = character.Equips.Count(equip =>
@@ -28604,6 +28911,114 @@ namespace AscNet.Test
             AssertEqual(nameof(EquipPutOnResponse), response.Name, "EquipPutOnRequestHandler response packet name");
             EquipPutOnResponse equipPutOnResponse = MessagePackSerializer.Deserialize<EquipPutOnResponse>(response.Content);
             AssertEqual(0, equipPutOnResponse.Code, "EquipPutOnRequestHandler successful weapon swap response");
+
+            harness.Session.AppliedTeamPrefabId = 3;
+            InvokeRegisteredRequestHandler(
+                nameof(EquipTakeOffRequest),
+                harness.Session,
+                921,
+                new EquipTakeOffRequest { EquipIds = [(int)targetEquip.Id] });
+            AssertEqual(0, ReadResponsePayload<EquipTakeOffResponse>(
+                harness,
+                921,
+                nameof(EquipTakeOffResponse),
+                "EquipTakeOffRequestHandler response").Code,
+                "EquipTakeOffRequestHandler successful response");
+            AssertEqual(0, targetEquip.CharacterId, "EquipTakeOffRequestHandler removes assignment");
+            AssertEqual(true, harness.Session.AppliedTeamPrefabId is null,
+                "EquipTakeOffRequestHandler clears applied preset");
+            AssertEqual(2, characterCollection.ReplaceOneCalls,
+                "EquipTakeOffRequestHandler persists equipment assignments");
+            AssertEqual(0,
+                characterCollection.LastReplacement?.Equips.Single(equip => equip.Id == targetEquip.Id).CharacterId ?? -1,
+                "EquipTakeOffRequestHandler persisted target assignment");
+        }
+
+        private static void AssertEquipPutOnValidationAndLockPersistence(IReadOnlyList<EquipTable> currentEquipRows)
+        {
+            CharacterTable[] characterRows = TableReaderV2.Parse<CharacterTable>().ToArray();
+            (EquipTable targetTable, CharacterTable targetCharacter) = (
+                from equip in currentEquipRows
+                where AscNet.Common.Database.Character.IsOwnableEquipTemplate(equip)
+                from characterRow in characterRows
+                where characterRow.EquipType == equip.Type
+                    && (equip.CharacterId == 0 || equip.CharacterId == characterRow.Id)
+                select (equip, characterRow)).FirstOrDefault();
+            if (targetTable is null || targetCharacter is null)
+                throw new InvalidDataException("Equip request validation: expected a compatible equipment and character table pair.");
+            EquipTable incompatibleTable = currentEquipRows.FirstOrDefault(equip =>
+                AscNet.Common.Database.Character.IsOwnableEquipTemplate(equip)
+                && equip.Type != targetCharacter.EquipType)
+                ?? throw new InvalidDataException("Equip request validation: expected an incompatible equipment table row.");
+            CharacterTable unownedCharacter = characterRows.FirstOrDefault(character => character.Id != targetCharacter.Id)
+                ?? throw new InvalidDataException("Equip request validation: expected a second character table row.");
+
+            EquipData targetEquip = CreateEquipPutOnTestEquip(93001, targetTable, characterId: 0);
+            EquipData incompatibleEquip = CreateEquipPutOnTestEquip(93002, incompatibleTable, characterId: 0);
+            AscNet.Common.Database.Character character = new()
+            {
+                Uid = 93000,
+                Characters = [new CharacterData { Id = (uint)targetCharacter.Id }],
+                Equips = [targetEquip, incompatibleEquip],
+                Fashions = []
+            };
+            using MongoCollectionOverride mongoOverride =
+                MongoCollectionOverride.InstallForDailySignInCompatibility(
+                    out _,
+                    out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> characterCollection,
+                    out _);
+            using LoopbackSessionHarness harness = new(character);
+
+            InvokeRegisteredRequestHandler(nameof(EquipUpdateLockRequest), harness.Session, 930,
+                new EquipUpdateLockRequest { EquipId = (int)targetEquip.Id, IsLock = true });
+            AssertEqual(0, ReadResponsePayload<EquipUpdateLockResponse>(
+                harness, 930, nameof(EquipUpdateLockResponse), "EquipUpdateLock lock response").Code,
+                "EquipUpdateLock lock succeeds");
+            AssertEqual(1, characterCollection.ReplaceOneCalls, "EquipUpdateLock changed state saves Character");
+            AscNet.Common.Database.Character reloaded = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Character>(
+                characterCollection.LastReplacement!.ToBson());
+            AssertEqual(true, reloaded.Equips.Single(equip => equip.Id == targetEquip.Id).IsLock,
+                "EquipUpdateLock persists through BSON reload");
+            harness.Session.character = reloaded;
+            targetEquip = reloaded.Equips.Single(equip => equip.Id == targetEquip.Id);
+            incompatibleEquip = reloaded.Equips.Single(equip => equip.Id == incompatibleEquip.Id);
+
+            InvokeRegisteredRequestHandler(nameof(EquipUpdateLockRequest), harness.Session, 931,
+                new EquipUpdateLockRequest { EquipId = (int)targetEquip.Id, IsLock = true });
+            AssertEqual(0, ReadResponsePayload<EquipUpdateLockResponse>(
+                harness, 931, nameof(EquipUpdateLockResponse), "EquipUpdateLock unchanged response").Code,
+                "EquipUpdateLock unchanged succeeds");
+            AssertEqual(1, characterCollection.ReplaceOneCalls, "EquipUpdateLock unchanged state avoids save");
+
+            InvokeRegisteredRequestHandler(nameof(EquipPutOnRequest), harness.Session, 932,
+                new EquipPutOnRequest { EquipId = (int)targetEquip.Id, CharacterId = unownedCharacter.Id, Site = targetTable.Site });
+            AssertEqual(20021012, ReadResponsePayload<EquipPutOnResponse>(
+                harness, 932, nameof(EquipPutOnResponse), "EquipPutOn unowned character response").Code,
+                "EquipPutOn rejects an unowned character");
+            AssertEqual(0, targetEquip.CharacterId, "EquipPutOn unowned character preserves target assignment");
+            AssertEqual(0, incompatibleEquip.CharacterId, "EquipPutOn unowned character preserves other assignments");
+            AssertEqual(1, characterCollection.ReplaceOneCalls, "EquipPutOn unowned character avoids save");
+            if (harness.TryReadAvailablePacket("EquipPutOn unowned character unexpected push", out Packet unownedUnexpected))
+                throw new InvalidDataException($"EquipPutOn unowned character emitted unexpected {unownedUnexpected.Type} packet.");
+
+            InvokeRegisteredRequestHandler(nameof(EquipPutOnRequest), harness.Session, 933,
+                new EquipPutOnRequest { EquipId = (int)incompatibleEquip.Id, CharacterId = targetCharacter.Id, Site = incompatibleTable.Site });
+            AssertEqual(20021012, ReadResponsePayload<EquipPutOnResponse>(
+                harness, 933, nameof(EquipPutOnResponse), "EquipPutOn incompatible equipment response").Code,
+                "EquipPutOn rejects incompatible equipment");
+            AssertEqual(0, targetEquip.CharacterId, "EquipPutOn incompatible equipment preserves target assignment");
+            AssertEqual(0, incompatibleEquip.CharacterId, "EquipPutOn incompatible equipment preserves assignment");
+            AssertEqual(1, characterCollection.ReplaceOneCalls, "EquipPutOn incompatible equipment avoids save");
+            if (harness.TryReadAvailablePacket("EquipPutOn incompatible equipment unexpected push", out Packet incompatibleUnexpected))
+                throw new InvalidDataException($"EquipPutOn incompatible equipment emitted unexpected {incompatibleUnexpected.Type} packet.");
+
+            InvokeRegisteredRequestHandler(nameof(EquipPutOnRequest), harness.Session, 934,
+                new EquipPutOnRequest { EquipId = (int)targetEquip.Id, CharacterId = targetCharacter.Id, Site = targetTable.Site });
+            AssertEqual(0, ReadResponsePayload<EquipPutOnResponse>(
+                harness, 934, nameof(EquipPutOnResponse), "EquipPutOn valid response").Code,
+                "EquipPutOn valid equipment succeeds");
+            AssertEqual(targetCharacter.Id, targetEquip.CharacterId, "EquipPutOn valid equipment assigns character");
+            AssertEqual(2, characterCollection.ReplaceOneCalls, "EquipPutOn valid equipment saves Character");
         }
 
         private static EquipData CreateEquipPutOnTestEquip(uint id, EquipTable table, int characterId)

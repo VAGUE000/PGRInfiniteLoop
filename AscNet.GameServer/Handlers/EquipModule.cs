@@ -4,12 +4,14 @@ using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.attrib;
+using AscNet.Table.V2.share.character;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.equip;
 using AscNet.Table.V2.share.config;
 using AscNet.Table.V2.share.item;
 using MessagePack;
+using MongoDB.Bson;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -331,7 +333,6 @@ namespace AscNet.GameServer.Handlers
     {
         private const int EquipFeedOperationTypeLevelUp = 1;
         private const int EquipFeedOperationTypeBreakthrough = 2;
-        private const int MaxDecomposedEquipCount = 100;
         private const int MaxReturnedEquipCount = 10_000;
 
         [RequestPacketHandler("EquipLevelUpRequest")]
@@ -840,9 +841,10 @@ namespace AscNet.GameServer.Handlers
                 // EquipManagerGetCharEquipBySiteNotFound
                 response.Code = 20021012;
             }
-            else
+            else if (equip.IsLock != request.IsLock)
             {
                 equip.IsLock = request.IsLock;
+                session.character.Save();
             }
 
             session.SendResponse(response, packet.Id);
@@ -869,6 +871,20 @@ namespace AscNet.GameServer.Handlers
                 session.SendResponse(new EquipPutOnResponse() { Code = 20021002 }, packet.Id);
                 return;
             }
+            CharacterData? targetCharacter = session.character.Characters
+                .Find(character => character.Id == request.CharacterId);
+            CharacterTable? targetCharacterTable = targetCharacter is null
+                ? null
+                : TableReaderV2.Parse<CharacterTable>().FirstOrDefault(character => character.Id == request.CharacterId);
+            if (targetCharacterTable is null
+                || toEquipTable.Type != targetCharacterTable.EquipType
+                || (toEquipTable.CharacterId != 0 && toEquipTable.CharacterId != request.CharacterId)
+                || toEquipTable.Site != request.Site)
+            {
+                // EquipManagerGetCharEquipBySiteNotFound
+                session.SendResponse(new EquipPutOnResponse() { Code = 20021012 }, packet.Id);
+                return;
+            }
 
             List<EquipData> previousEquips = session.character.Equips
                 .Where(equip => equip.Id != toEquip.Id && equip.CharacterId == request.CharacterId)
@@ -878,6 +894,8 @@ namespace AscNet.GameServer.Handlers
                     return IsSameEquipSlot(equippedTable, toEquipTable);
                 })
                 .ToList();
+            bool changed = toEquip.CharacterId != request.CharacterId || previousEquips.Count > 0;
+
 
             foreach (EquipData previousEquip in previousEquips)
             {
@@ -885,6 +903,10 @@ namespace AscNet.GameServer.Handlers
             }
 
             toEquip.CharacterId = request.CharacterId;
+            if (changed)
+                session.character.Save();
+            session.AppliedTeamPrefabId = null;
+
 
             if (previousEquips.Count > 0)
             {
@@ -901,12 +923,21 @@ namespace AscNet.GameServer.Handlers
         {
             EquipTakeOffRequest request = packet.Deserialize<EquipTakeOffRequest>();
 
-            foreach (var equipId in request.EquipIds)
+            bool changed = false;
+            foreach (int equipId in request.EquipIds)
             {
-                var equip = session.character.Equips.Find(x => x.Id == equipId);
-                if (equip is not null)
-                    equip.CharacterId = 0;
+                EquipData? equip = session.character.Equips.Find(candidate => candidate.Id == equipId);
+                if (equip?.CharacterId is not > 0)
+                    continue;
+                equip.CharacterId = 0;
+                changed = true;
             }
+            if (changed)
+            {
+                session.character.Save();
+                session.AppliedTeamPrefabId = null;
+            }
+
 
             session.SendResponse(new EquipTakeOffResponse(), packet.Id);
         }
@@ -1000,6 +1031,8 @@ namespace AscNet.GameServer.Handlers
                     equip.CharacterId = request.CharacterId;
             }
             session.character.Save();
+            session.AppliedTeamPrefabId = null;
+
             session.SendResponse(new EquipPutOnChipGroupResponse(), packet.Id);
         }
 
@@ -1019,7 +1052,7 @@ namespace AscNet.GameServer.Handlers
             {
                 EquipData? equip = session.character.Equips.FirstOrDefault(value => value.Id == chipId);
                 EquipTable? row = equip is null ? null : Character.ResolveEquipTemplate(equip.TemplateId);
-                if (row is null || row.Site <= 0 || !sites.Add(row.Site))
+                if (equip?.IsRecycle == true || row is null || row.Site <= 0 || !sites.Add(row.Site))
                     return false;
             }
             return true;
@@ -1256,6 +1289,8 @@ namespace AscNet.GameServer.Handlers
                 equip.ResonanceInfo.Add(resonance);
                 session.PendingEquipResonances.Remove((equip.Id, resonance.Slot));
                 session.character.Save();
+                session.AppliedTeamPrefabId = null;
+
             }
             else
             {
@@ -1434,6 +1469,8 @@ namespace AscNet.GameServer.Handlers
             itemPush.ItemDataList.Add(session.inventory.Do(request.UseItemId, -totalMaterialCost));
             session.character.Save();
             session.inventory.Save();
+            session.AppliedTeamPrefabId = null;
+
             session.SendPush(archivePush);
             session.SendPush(itemPush);
             session.SendResponse(new EquipQuickResonanceChipResponse
@@ -1746,7 +1783,11 @@ namespace AscNet.GameServer.Handlers
 
             session.PendingEquipResonances.Remove((equip.Id, request.Slot));
             if (request.IsUse)
+            {
                 session.character.Save();
+                session.AppliedTeamPrefabId = null;
+            }
+
             session.SendResponse(new EquipResonanceConfirmResponse(), packet.Id);
         }
 
@@ -1844,6 +1885,7 @@ namespace AscNet.GameServer.Handlers
 
             equip.WeaponOverrunData.ChoseSuit = request.SuitId;
             session.character.Save();
+            session.AppliedTeamPrefabId = null;
             session.SendResponse(new EquipWeaponChoseOverrunSuitResponse
             {
                 WeaponOverrunData = equip.WeaponOverrunData
@@ -2039,53 +2081,86 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
+            Character originalCharacter = session.character;
+            Inventory originalInventory = session.inventory;
+            Character stagedCharacter = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Character>(
+                originalCharacter.ToBson());
+            Inventory stagedInventory = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Inventory>(
+                originalInventory.ToBson());
             NotifyItemDataList notifyItemData = new();
             NotifyEquipDataList notifyEquipData = new();
-
-            // Add returned equipment before deleting sources so Character.AddEquip's
-            // max-based allocator cannot reuse a deleted source UID.
-            foreach (IGrouping<int, EquipDecomposeReward> itemRewards in rewardSpecs
-                         .Where(reward => reward.Type == RewardType.Item)
-                         .GroupBy(reward => reward.TemplateId))
+            bool characterPersisted = false;
+            session.character = stagedCharacter;
+            session.inventory = stagedInventory;
+            try
             {
-                notifyItemData.ItemDataList.Add(
-                    session.inventory.Do(itemRewards.Key, itemRewards.Sum(reward => reward.Count)));
-            }
-
-            foreach (EquipDecomposeReward reward in rewardSpecs.Where(reward => reward.Type == RewardType.Equip))
-            {
-                for (int i = 0; i < reward.Count; i++)
+                foreach (IGrouping<int, EquipDecomposeReward> itemRewards in rewardSpecs
+                             .Where(reward => reward.Type == RewardType.Item)
+                             .GroupBy(reward => reward.TemplateId))
                 {
-                    EquipData? returnedEquip = session.character.AddEquip(
-                        (uint)reward.TemplateId,
-                        level: Math.Max(1, reward.Level));
-                    if (returnedEquip is null)
-                        throw new InvalidDataException($"Unable to grant decomposed equipment template {reward.TemplateId}.");
-
-                    notifyEquipData.EquipDataList.Add(returnedEquip);
+                    notifyItemData.ItemDataList.Add(
+                        stagedInventory.Do(itemRewards.Key, itemRewards.Sum(reward => reward.Count)));
                 }
+
+                foreach (EquipDecomposeReward reward in rewardSpecs.Where(reward => reward.Type == RewardType.Equip))
+                {
+                    for (int i = 0; i < reward.Count; i++)
+                    {
+                        EquipData? returnedEquip = stagedCharacter.AddEquip(
+                            (uint)reward.TemplateId, level: Math.Max(1, reward.Level));
+                        if (returnedEquip is null)
+                            throw new InvalidDataException($"Unable to grant decomposed equipment template {reward.TemplateId}.");
+
+                        notifyEquipData.EquipDataList.Add(returnedEquip);
+                    }
+                }
+
+                foreach (uint sourceId in sourceEquips.Select(equip => equip.Id))
+                {
+                    EquipData? sourceEquip = stagedCharacter.Equips.SingleOrDefault(equip => equip.Id == sourceId);
+                    if (sourceEquip is null || !stagedCharacter.Equips.Remove(sourceEquip))
+                        throw new InvalidDataException($"Unable to remove decomposed equipment UID {sourceId}.");
+
+                    notifyEquipData.DeletedEquipIdList.Add(sourceId);
+                }
+
+                stagedCharacter.SaveChecked();
+                characterPersisted = true;
+                stagedInventory.SaveChecked();
+                CopyEquipDecomposeState(originalCharacter, stagedCharacter, originalInventory, stagedInventory);
             }
-
-            foreach (EquipData sourceEquip in sourceEquips)
+            catch
             {
-                if (!session.character.Equips.Remove(sourceEquip))
-                    throw new InvalidDataException($"Unable to remove decomposed equipment UID {sourceEquip.Id}.");
-
-                notifyEquipData.DeletedEquipIdList.Add(sourceEquip.Id);
+                if (characterPersisted)
+                    originalCharacter.SaveChecked();
+                session.SendResponse(new EquipDecomposeResponse { Code = 1 }, packet.Id);
+                return;
+            }
+            finally
+            {
+                session.character = originalCharacter;
+                session.inventory = originalInventory;
             }
 
             if (notifyItemData.ItemDataList.Count > 0)
                 session.SendPush(notifyItemData);
             if (notifyEquipData.EquipDataList.Count > 0 || notifyEquipData.DeletedEquipIdList.Count > 0)
                 session.SendPush(notifyEquipData);
-
-            session.character.Save();
-            session.inventory.Save();
             session.SendResponse(new EquipDecomposeResponse
             {
                 Code = 0,
                 RewardGoodsList = BuildEquipDecomposeResponseRewards(rewardSpecs)
             }, packet.Id);
+        }
+
+        private static void CopyEquipDecomposeState(
+            Character originalCharacter,
+            Character stagedCharacter,
+            Inventory originalInventory,
+            Inventory stagedInventory)
+        {
+            originalCharacter.Equips = stagedCharacter.Equips;
+            originalInventory.Items = stagedInventory.Items;
         }
 
         private sealed class EquipDecomposeReward
@@ -2125,9 +2200,8 @@ namespace AscNet.GameServer.Handlers
         {
             sourceEquips = [];
             rewardSpecs = [];
-            if (equipIds is null || equipIds.Count == 0 || equipIds.Count > MaxDecomposedEquipCount)
+            if (equipIds is null || equipIds.Count == 0)
                 return false;
-
             HashSet<int> requestedIds = [];
             IGrouping<uint, EquipData>[] equipGroups = session.character.Equips
                 .GroupBy(equip => equip.Id)
@@ -2156,10 +2230,12 @@ namespace AscNet.GameServer.Handlers
                     || equip.IsLock
                     || equip.CharacterId != 0
                     || equip.IsRecycle
-                    || session.player.IsEquipInTeamPrefab(equip.Id))
-                {
+                    || session.player.IsEquipInTeamPrefab(equip.Id)
+                    || session.player.IsEquipInChipGroup(equip.Id)
+                    || equip.ResonanceInfo?.Count > 0
+                    || equip.UnconfirmedResonanceInfo?.Count > 0
+                    || session.PendingEquipResonances.Keys.Any(key => key.Item1 == equip.Id))
                     return false;
-                }
 
                 EquipTable? equipTable = equipTables.FirstOrDefault(table => table.Id == equip.TemplateId);
                 if (equipTable is null || !Character.IsOwnableEquipTemplate(equipTable))
@@ -2296,6 +2372,7 @@ namespace AscNet.GameServer.Handlers
                     || !Inventory.IsValidClientItemId(reward.TemplateId))
                 {
                     return false;
+
                 }
 
                 long requestedCount;
@@ -2327,7 +2404,7 @@ namespace AscNet.GameServer.Handlers
 
                 if (finalCount > int.MaxValue)
                     return false;
-                if (itemTable.MaxCount is int maxCount && finalCount > maxCount)
+                if (finalCount > Inventory.GetMaxCount(itemTable))
                     return false;
             }
 
