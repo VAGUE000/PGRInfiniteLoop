@@ -877,7 +877,7 @@ namespace AscNet.GameServer.Handlers
                 ? null
                 : TableReaderV2.Parse<CharacterTable>().FirstOrDefault(character => character.Id == request.CharacterId);
             if (targetCharacterTable is null
-                || toEquipTable.Type != targetCharacterTable.EquipType
+                || (toEquipTable.Site == 0 && toEquipTable.Type != targetCharacterTable.EquipType)
                 || (toEquipTable.CharacterId != 0 && toEquipTable.CharacterId != request.CharacterId)
                 || toEquipTable.Site != request.Site)
             {

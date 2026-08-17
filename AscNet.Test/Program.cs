@@ -29209,18 +29209,26 @@ namespace AscNet.Test
                 throw new InvalidDataException("Equip request validation: expected a compatible equipment and character table pair.");
             EquipTable incompatibleTable = currentEquipRows.FirstOrDefault(equip =>
                 AscNet.Common.Database.Character.IsOwnableEquipTemplate(equip)
+                && equip.Site == 0
                 && equip.Type != targetCharacter.EquipType)
-                ?? throw new InvalidDataException("Equip request validation: expected an incompatible equipment table row.");
+                ?? throw new InvalidDataException("Equip request validation: expected an incompatible weapon table row.");
+            EquipTable memoryTable = currentEquipRows.FirstOrDefault(equip =>
+                AscNet.Common.Database.Character.IsOwnableEquipTemplate(equip)
+                && equip.Type == 0
+                && equip.Site is >= 1 and <= 6
+                && equip.CharacterType == targetCharacter.Type)
+                ?? throw new InvalidDataException("Equip request validation: expected a compatible Memory table row.");
             CharacterTable unownedCharacter = characterRows.FirstOrDefault(character => character.Id != targetCharacter.Id)
                 ?? throw new InvalidDataException("Equip request validation: expected a second character table row.");
 
             EquipData targetEquip = CreateEquipPutOnTestEquip(93001, targetTable, characterId: 0);
             EquipData incompatibleEquip = CreateEquipPutOnTestEquip(93002, incompatibleTable, characterId: 0);
+            EquipData memoryEquip = CreateEquipPutOnTestEquip(93003, memoryTable, characterId: 0);
             AscNet.Common.Database.Character character = new()
             {
                 Uid = 93000,
                 Characters = [new CharacterData { Id = (uint)targetCharacter.Id }],
-                Equips = [targetEquip, incompatibleEquip],
+                Equips = [targetEquip, incompatibleEquip, memoryEquip],
                 Fashions = []
             };
             using MongoCollectionOverride mongoOverride =
@@ -29243,6 +29251,7 @@ namespace AscNet.Test
             harness.Session.character = reloaded;
             targetEquip = reloaded.Equips.Single(equip => equip.Id == targetEquip.Id);
             incompatibleEquip = reloaded.Equips.Single(equip => equip.Id == incompatibleEquip.Id);
+            memoryEquip = reloaded.Equips.Single(equip => equip.Id == memoryEquip.Id);
 
             InvokeRegisteredRequestHandler(nameof(EquipUpdateLockRequest), harness.Session, 931,
                 new EquipUpdateLockRequest { EquipId = (int)targetEquip.Id, IsLock = true });
@@ -29280,6 +29289,14 @@ namespace AscNet.Test
                 "EquipPutOn valid equipment succeeds");
             AssertEqual(targetCharacter.Id, targetEquip.CharacterId, "EquipPutOn valid equipment assigns character");
             AssertEqual(2, characterCollection.ReplaceOneCalls, "EquipPutOn valid equipment saves Character");
+
+            InvokeRegisteredRequestHandler(nameof(EquipPutOnRequest), harness.Session, 935,
+                new EquipPutOnRequest { EquipId = (int)memoryEquip.Id, CharacterId = targetCharacter.Id, Site = memoryTable.Site });
+            AssertEqual(0, ReadResponsePayload<EquipPutOnResponse>(
+                harness, 935, nameof(EquipPutOnResponse), "EquipPutOn valid Memory response").Code,
+                "EquipPutOn valid Memory succeeds");
+            AssertEqual(targetCharacter.Id, memoryEquip.CharacterId, "EquipPutOn valid Memory assigns character");
+            AssertEqual(3, characterCollection.ReplaceOneCalls, "EquipPutOn valid Memory saves Character");
         }
 
         private static EquipData CreateEquipPutOnTestEquip(uint id, EquipTable table, int characterId)
