@@ -194,6 +194,10 @@ namespace AscNet.GameServer.Handlers
             TableReaderV2.Parse<BossSingleGroupTable>().ToDictionary(row => row.Id));
         private static readonly Lazy<List<BossSingleSectionTable>> Sections = new(() =>
             TableReaderV2.Parse<BossSingleSectionTable>());
+        private static readonly Lazy<List<BossSingleChallengeGradeTable>> ChallengeGrades = new(() =>
+            TableReaderV2.Parse<BossSingleChallengeGradeTable>());
+        private static readonly Lazy<List<BossSingleChallengeFeatureGroupTable>> ChallengeFeatureGroups = new(() =>
+            TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>().OrderBy(row => row.Id).ToList());
         private static readonly Lazy<Dictionary<int, BossSingleStageTable>> Stages = new(() =>
             TableReaderV2.Parse<BossSingleStageTable>().ToDictionary(row => row.StageId));
         private static readonly Lazy<Dictionary<int, BossSingleScoreRuleTable>> ScoreRules = new(() =>
@@ -315,7 +319,7 @@ namespace AscNet.GameServer.Handlers
             }
 
             int stageStatus = DetermineStageStatus(state, request.StageId, history.Characters);
-            if (!CanConsumeAttempt(state, ResolveGrade(state.BossLevelType), history.Characters, stageStatus))
+            if (!CanConsumeAttempt(state, ResolveGrade(state.BossLevelType), sectionId, history.Characters, stageStatus))
             {
                 session.SendResponse(new BossSingleAutoFightResponse { Code = 1 }, packet.Id);
                 return;
@@ -459,7 +463,7 @@ namespace AscNet.GameServer.Handlers
 
                 SimulatedBattlefieldState state = session.player.SimulatedBattlefield;
                 int stageStatus = DetermineStageStatus(state, stageId, characters);
-                if (!CanConsumeAttempt(state, ResolveGrade(state.BossLevelType), characters, stageStatus))
+                if (!CanConsumeAttempt(state, ResolveGrade(state.BossLevelType), sectionId, characters, stageStatus))
                     return false;
 
                 state.BossNormalStageTeams[sectionId] = characters.ToList();
@@ -539,6 +543,7 @@ namespace AscNet.GameServer.Handlers
 
             SimulatedBattlefieldState state = player.SimulatedBattlefield;
             BossSingleGradeTable? grade = state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null;
+            (int LevelType, int SectionId, int FeatureGroupId)? challenge = ResolveChallengeData(state, grade);
             return new NotifyFubenBossSingleData
             {
                 FubenBossSingleData = new()
@@ -569,9 +574,9 @@ namespace AscNet.GameServer.Handlers
                     TrialStageInfoList = BuildStageScoreList(state.BossTrialScores),
                     BestiraryStageInfoList = BuildStageScoreList(state.BossBestiaryScores),
                     AfreshId = CurrentAfreshId,
-                    ChallengeLevelType = 0,
-                    ChallengeSectionId = 0,
-                    ChallengeFeatureGroupId = 0,
+                    ChallengeLevelType = challenge?.LevelType ?? 0,
+                    ChallengeSectionId = challenge?.SectionId ?? 0,
+                    ChallengeFeatureGroupId = challenge?.FeatureGroupId ?? 0,
                     ChallengeTotalScore = 0,
                     ChallengeStageHistoryList = [],
                     ChallengeDeleteRecordTime = 0,
@@ -604,6 +609,32 @@ namespace AscNet.GameServer.Handlers
                     ? state.BossListOptions.ToDictionary(entry => entry.Key, entry => entry.Value.ToList())
                     : null
             };
+        }
+        private static (int LevelType, int SectionId, int FeatureGroupId)? ResolveChallengeData(
+            SimulatedBattlefieldState state,
+            BossSingleGradeTable? normalGrade)
+        {
+            if (normalGrade is null || state.BossActivityNo <= 0)
+                return null;
+
+            BossSingleChallengeGradeTable? challengeGrade = ChallengeGrades.Value
+                .Where(row => normalGrade.GradeType >= row.NeedGradeType
+                    && state.BossTotalScore >= row.NeedScore)
+                .OrderByDescending(row => row.LevelType)
+                .FirstOrDefault();
+            if (challengeGrade is null
+                || !Groups.Value.TryGetValue(challengeGrade.BossGroupId, out BossSingleGroupTable? group))
+                return null;
+
+            List<int> sections = group.SectionId.Where(HasCurrentSection).ToList();
+            if (sections.Count == 0 || ChallengeFeatureGroups.Value.Count == 0)
+                return null;
+
+            int sectionIndex = checked((int)(StableHash(
+                $"{state.BossActivityNo}:{challengeGrade.LevelType}:{challengeGrade.BossGroupId}") % (uint)sections.Count));
+            int featureIndex = checked((int)(StableHash(
+                $"{state.BossActivityNo}:{challengeGrade.LevelType}:feature") % (uint)ChallengeFeatureGroups.Value.Count));
+            return (challengeGrade.LevelType, sections[sectionIndex], ChallengeFeatureGroups.Value[featureIndex].Id);
         }
 
         internal static NotifyBossActivityData? BuildActivityLoginData(Session session, DateTimeOffset? now = null)
@@ -758,9 +789,9 @@ namespace AscNet.GameServer.Handlers
 
             BossSingleGradeTable grade = ResolveGrade(state.BossLevelType);
             int stageStatus = DetermineStageStatus(state, pending.StageId, pending.Characters);
-            if (!CanConsumeAttempt(state, grade, pending.Characters, stageStatus))
+            if (!CanConsumeAttempt(state, grade, pending.SectionId, pending.Characters, stageStatus))
                 return false;
-            ConsumeAttempt(state, pending.Characters, stageStatus);
+            ConsumeAttempt(state, pending.SectionId, pending.Characters, stageStatus);
 
             BossSingleStageRecordState? record = state.BossStageRecords.Find(value => value.StageId == pending.StageId);
             if (record is null)
@@ -968,6 +999,7 @@ namespace AscNet.GameServer.Handlers
             state.BossClaimedRewardIds.Clear();
             state.BossLastScoreTime = 0;
         }
+
 
         private static bool TrySelectOnlyOption(SimulatedBattlefieldState state)
         {
@@ -1184,11 +1216,16 @@ namespace AscNet.GameServer.Handlers
         private static bool CanConsumeAttempt(
             SimulatedBattlefieldState state,
             BossSingleGradeTable grade,
+            int sectionId,
             IReadOnlyCollection<int> characters,
             int stageStatus)
         {
-            if (stageStatus == 0 && state.BossChallengeCount >= CurrentChallengeLimit(grade, null))
+            if (stageStatus == 0
+                && !HasSectionRecord(state, sectionId)
+                && state.BossChallengeCount >= CurrentChallengeLimit(grade, null))
+            {
                 return false;
+            }
             if (stageStatus is 0 or 1 or 3)
             {
                 return characters.All(characterId =>
@@ -1199,16 +1236,23 @@ namespace AscNet.GameServer.Handlers
 
         private static void ConsumeAttempt(
             SimulatedBattlefieldState state,
+            int sectionId,
             IReadOnlyCollection<int> characters,
             int stageStatus)
         {
-            if (stageStatus == 0)
+            if (stageStatus == 0 && !HasSectionRecord(state, sectionId))
                 state.BossChallengeCount++;
             if (stageStatus is 0 or 1 or 3)
             {
                 foreach (int characterId in characters)
                     state.BossCharacterPoints[characterId] = state.BossCharacterPoints.GetValueOrDefault(characterId) + 1;
             }
+        }
+
+        private static bool HasSectionRecord(SimulatedBattlefieldState state, int sectionId)
+        {
+            List<int> stageIds = ResolveSection(sectionId).StageId;
+            return state.BossStageRecords.Any(record => stageIds.Contains(record.StageId));
         }
 
         private static int CurrentChallengeLimit(BossSingleGradeTable grade, long? now)

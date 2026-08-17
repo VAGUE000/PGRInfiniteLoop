@@ -27106,10 +27106,13 @@ namespace AscNet.Test
                 out RecordingMongoCollectionProxy<AscNet.Common.Database.Stage> stageCollection);
             const long playerId = 99_701;
             const uint characterId = 1_021_001;
+            uint[] historyCharacterIds = [1_021_002, 1_021_003, 1_021_004];
             AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
             player.SimulatedBattlefield = new() { BossRankPlatform = 2 };
             AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
             character.Characters.Add(CreateLoginAccountCompatibilityCharacter(characterId, 3_021_001));
+            foreach (uint historyCharacterId in historyCharacterIds)
+                character.Characters.Add(CreateLoginAccountCompatibilityCharacter(historyCharacterId, 3_021_001));
             AscNet.Common.Database.Inventory inventory = CreateDrawCompatibilityInventory(playerId, []);
             using LoopbackSessionHarness harness = new(character, player, inventory, "boss-single-compat-test");
             harness.Session.stage = CreateLoginAccountCompatibilityStage(playerId);
@@ -27342,7 +27345,7 @@ namespace AscNet.Test
                 throw new InvalidDataException($"{name}: expected {responseName} within {maxPackets} packets.");
             }
 
-            PreFightResponse StartFight(int packetId, int stageId, int stageType)
+            PreFightResponse StartFight(int packetId, int stageId, int stageType, IReadOnlyList<uint>? cardIds = null)
             {
                 InvokeRegisteredRequestHandler(
                     nameof(PreFightRequest),
@@ -27354,7 +27357,7 @@ namespace AscNet.Test
                         {
                             StageId = checked((uint)stageId),
                             ChallengeCount = 1,
-                            CardIds = [characterId],
+                            CardIds = cardIds?.ToList() ?? [characterId],
                             RobotIds = [],
                             BossSingleStageType = stageType
                         }
@@ -27690,6 +27693,165 @@ namespace AscNet.Test
             int normalSectionId = selectedSections.Single(sectionId =>
                 sections.Single(row => row.SectionId == sectionId && row.AfreshId == 1).StageId.Contains(normalStage.StageId));
 
+            List<(int SectionId, BossSingleStageTable Opening, BossSingleStageTable Final, uint CharacterId)> historyStages =
+                selectedSections
+                    .Take(3)
+                    .Select((sectionId, index) =>
+                    {
+                        List<int> stageIds = sections
+                            .Single(row => row.SectionId == sectionId && row.AfreshId == 1)
+                            .StageId;
+                        return (
+                            sectionId,
+                            stages.Single(row => row.StageId == stageIds.First()),
+                            stages.Single(row => row.StageId == stageIds.Last()),
+                            historyCharacterIds[index]);
+                    })
+                    .ToList();
+            AssertEqual(3, historyStages.Count, "Pain Cage table-selected three-section history fixture");
+            AssertEqual(true, historyStages.All(fixture => fixture.Opening.StageId != fixture.Final.StageId),
+                "Pain Cage table-selected sections have distinct opening and final stages");
+
+            foreach (var historyStage in historyStages)
+            {
+                int packetBase = 82_100 + historyStages.FindIndex(fixture => fixture.CharacterId == historyStage.CharacterId) * 10;
+                PreFightResponse openingPreFight = StartFight(
+                    packetBase,
+                    historyStage.Opening.StageId,
+                    stageType: 1,
+                    [historyStage.CharacterId]);
+                AssertEqual(0, openingPreFight.Code,
+                    $"Pain Cage section opening {historyStage.Opening.StageId} pre-fight code");
+                FightSettleResponse openingSettle = SettleFight(
+                    packetBase + 1,
+                    openingPreFight,
+                    historyStage.Opening,
+                    100,
+                    0);
+                _ = RequiredBossResult(openingSettle, $"Pain Cage section opening {historyStage.Opening.StageId} result");
+                BossSingleSaveScoreResponse openingSave = SaveScore(
+                    packetBase + 2,
+                    historyStage.Opening.StageId,
+                    $"Pain Cage section opening {historyStage.Opening.StageId} save",
+                    out _);
+                AssertEqual(0, openingSave.Code, $"Pain Cage section opening {historyStage.Opening.StageId} save code");
+            }
+            AssertEqual(3, player.SimulatedBattlefield.BossChallengeCount,
+                "Pain Cage counts first clears in three distinct sections");
+
+            foreach (var historyStage in historyStages.Take(2))
+            {
+                int packetBase = 82_140 + historyStages.FindIndex(fixture => fixture.CharacterId == historyStage.CharacterId) * 10;
+                PreFightResponse finalPreFight = StartFight(
+                    packetBase,
+                    historyStage.Final.StageId,
+                    stageType: 1,
+                    [historyStage.CharacterId]);
+                AssertEqual(0, finalPreFight.Code, $"Pain Cage final stage {historyStage.Final.StageId} pre-fight code");
+                FightSettleResponse finalSettle = SettleFight(
+                    packetBase + 1,
+                    finalPreFight,
+                    historyStage.Final,
+                    100,
+                    0);
+                _ = RequiredBossResult(finalSettle, $"Pain Cage final stage {historyStage.Final.StageId} result");
+                BossSingleSaveScoreResponse finalSave = SaveScore(
+                    packetBase + 2,
+                    historyStage.Final.StageId,
+                    $"Pain Cage final stage {historyStage.Final.StageId} save",
+                    out _);
+                AssertEqual(0, finalSave.Code, $"Pain Cage final stage {historyStage.Final.StageId} save code");
+            }
+            AssertEqual(3, player.SimulatedBattlefield.BossChallengeCount,
+                "Pain Cage later phases retain the three-section attempt count");
+            var retriedFinalStage = historyStages[0];
+            uint lowerScoreCharacterId = historyStages[2].CharacterId;
+            PreFightResponse lowerScorePreFight = StartFight(
+                82_170,
+                retriedFinalStage.Final.StageId,
+                stageType: 1,
+                [lowerScoreCharacterId]);
+            AssertEqual(0, lowerScorePreFight.Code,
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower-score pre-fight code");
+            FightSettleResponse lowerScoreSettle = SettleFight(
+                82_171,
+                lowerScorePreFight,
+                retriedFinalStage.Final,
+                characterHp: 0,
+                bossHp: 100,
+                isWin: false);
+            BossSingleFightResult lowerScoreResult = RequiredBossResult(
+                lowerScoreSettle,
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower-score result");
+            AscNet.Common.Database.BossSingleStageRecordState bestFinalRecord = player.SimulatedBattlefield.BossStageRecords
+                .Single(record => record.StageId == retriedFinalStage.Final.StageId);
+            AssertEqual(true, lowerScoreResult.TotalScore < bestFinalRecord.MaxScore,
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower-score fixture");
+            BossSingleSaveScoreResponse lowerScoreSave = SaveScore(
+                82_172,
+                retriedFinalStage.Final.StageId,
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower-score save",
+                out _);
+            AssertEqual(0, lowerScoreSave.Code,
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower-score save code");
+            AssertIntegerList(
+                [retriedFinalStage.CharacterId],
+                bestFinalRecord.MaxCharacters.Select(Convert.ToInt64).ToArray(),
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower score preserves best team");
+            AssertIntegerList(
+                [lowerScoreCharacterId],
+                bestFinalRecord.Characters.Select(Convert.ToInt64).ToArray(),
+                $"Pain Cage final stage {retriedFinalStage.Final.StageId} lower score retains latest team");
+
+            void AssertFinalStageHistory(AscNet.Common.Database.Player target, string name)
+            {
+                JObject data = RequiredValue<JObject>(
+                    JObject.Parse(MessagePackSerializer.ConvertToJson(MessagePackSerializer.Serialize(BuildLogin(target, null)))),
+                    "FubenBossSingleData",
+                    JTokenType.Object,
+                    name);
+                JArray stageRecords = RequiredValue<JArray>(data, "StageRecordList", JTokenType.Array, name);
+                foreach (var historyStage in historyStages.Take(2))
+                {
+                    JObject record = stageRecords
+                        .OfType<JObject>()
+                        .Single(value => RequiredValue<int>(value, "StageId", JTokenType.Integer, name)
+                            == historyStage.Final.StageId);
+                    uint expectedCurrentCharacterId = historyStage.Final.StageId == retriedFinalStage.Final.StageId
+                        ? lowerScoreCharacterId
+                        : historyStage.CharacterId;
+                    AssertIntegerList(
+                        [expectedCurrentCharacterId],
+                        RequiredValue<JArray>(record, "Characters", JTokenType.Array, name)
+                            .Select(value => value.Value<long>())
+                            .ToArray(),
+                        $"{name} final stage {historyStage.Final.StageId} current team");
+                    AssertIntegerList(
+                        [historyStage.CharacterId],
+                        RequiredValue<JArray>(record, "MaxCharacters", JTokenType.Array, name)
+                            .Select(value => value.Value<long>())
+                            .ToArray(),
+                        $"{name} final stage {historyStage.Final.StageId} best team");
+                }
+            }
+
+            AssertFinalStageHistory(player, "Pain Cage saved final-stage Team History");
+            AscNet.Common.Database.Player historyReloaded =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(player.ToBsonDocument());
+            AssertFinalStageHistory(historyReloaded, "Pain Cage relogged final-stage Team History");
+
+            player.SimulatedBattlefield.BossChallengeCount = 0;
+            player.SimulatedBattlefield.BossAutoFightCount = 0;
+            player.SimulatedBattlefield.BossCharacterPoints.Clear();
+            player.SimulatedBattlefield.BossHistory.Clear();
+            player.SimulatedBattlefield.BossStageRecords.Clear();
+            player.SimulatedBattlefield.BossResetStageIds.Clear();
+            player.SimulatedBattlefield.BossNormalStageTeams.Clear();
+            player.SimulatedBattlefield.BossTotalScore = 0;
+            player.SimulatedBattlefield.BossCurrentTotalScore = 0;
+            player.SimulatedBattlefield.BossMaxScore = 0;
+            player.SimulatedBattlefield.BossLastScoreTime = 0;
+
             PreFightResponse discardedPreFight = StartFight(82_024, normalStage.StageId, stageType: 1);
             AssertEqual(0, discardedPreFight.Code, "Pain Cage discarded-score pre-fight code");
             _ = SettleFight(82_025, discardedPreFight, normalStage, characterHp: 100, bossHp: 0);
@@ -27918,10 +28080,24 @@ namespace AscNet.Test
             AssertEqual(1, staminaRejected.Code, "Pain Cage exhausted character stamina rejection");
             AssertEqual(null, harness.Session.fight, "Pain Cage stamina rejection creates no fight");
             player.SimulatedBattlefield.BossCharacterPoints[checked((int)characterId)] = pointsBeforeConstraintChecks;
+            int constraintSectionId = selectedSections.Single(sectionId =>
+                sections.Single(row => row.SectionId == sectionId && row.AfreshId == currentAfreshId)
+                    .StageId.Contains(constraintStageId));
+            HashSet<int> constraintSectionStageIds = sections
+                .Single(row => row.SectionId == constraintSectionId && row.AfreshId == currentAfreshId)
+                .StageId
+                .ToHashSet();
+            List<AscNet.Common.Database.BossSingleStageRecordState> constraintSectionRecords =
+                player.SimulatedBattlefield.BossStageRecords
+                    .Where(record => constraintSectionStageIds.Contains(record.StageId))
+                    .ToList();
+            player.SimulatedBattlefield.BossStageRecords.RemoveAll(
+                record => constraintSectionStageIds.Contains(record.StageId));
             player.SimulatedBattlefield.BossChallengeCount = int.MaxValue;
             PreFightResponse attemptsRejected = StartFight(82_037, constraintStageId, stageType: 1);
             AssertEqual(1, attemptsRejected.Code, "Pain Cage exhausted challenge-count rejection");
             AssertEqual(null, harness.Session.fight, "Pain Cage challenge-count rejection creates no fight");
+            player.SimulatedBattlefield.BossStageRecords.AddRange(constraintSectionRecords);
             player.SimulatedBattlefield.BossChallengeCount = challengeCountBeforeConstraintChecks;
 
             const int resetPacketId = 82_038;
@@ -28128,6 +28304,42 @@ namespace AscNet.Test
                     "Pain Cage challenge rank response");
             AssertEqual(0, challengeRank.Code, "Pain Cage challenge rank code");
 
+            BossSingleChallengeGradeTable challengeGrade = TableReaderV2.Parse<BossSingleChallengeGradeTable>().Single();
+            BossSingleGradeTable challengeNormalGrade = grades
+                .Where(row => row.AfreshId == currentAfreshId
+                    && row.GradeType >= challengeGrade.NeedGradeType)
+                .OrderByDescending(row => row.GradeType)
+                .First();
+            player.SimulatedBattlefield.BossLevelType = challengeNormalGrade.LevelType;
+            player.SimulatedBattlefield.BossTotalScore = challengeGrade.NeedScore - 1;
+            NotifyFubenBossSingleData lockedChallengeLogin = BuildLogin(player, null);
+            AssertEqual(0, lockedChallengeLogin.FubenBossSingleData.ChallengeLevelType,
+                "Pain Cage below normal-score gate has no intensive metadata");
+            AssertEqual(0, lockedChallengeLogin.FubenBossSingleData.ChallengeSectionId,
+                "Pain Cage below normal-score gate has no intensive section");
+            AssertEqual(0, lockedChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId,
+                "Pain Cage below normal-score gate has no intensive feature group");
+
+            player.SimulatedBattlefield.BossTotalScore = challengeGrade.NeedScore;
+            NotifyFubenBossSingleData eligibleChallengeLogin = BuildLogin(player, null);
+            AssertEqual(challengeGrade.LevelType, eligibleChallengeLogin.FubenBossSingleData.ChallengeLevelType,
+                "Pain Cage normal total score unlocks table-backed intensive level");
+            AssertEqual(true, TableReaderV2.Parse<BossSingleGroupTable>()
+                    .Single(row => row.Id == challengeGrade.BossGroupId)
+                    .SectionId.Contains(eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId),
+                "Pain Cage intensive section belongs to its challenge grade group");
+            AssertEqual(true, TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>()
+                    .Any(row => row.Id == eligibleChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId),
+                "Pain Cage intensive feature group is authoritative");
+            AssertEqual(0, eligibleChallengeLogin.FubenBossSingleData.ChallengeTotalScore,
+                "Pain Cage intensive score does not reuse normal total score");
+            NotifyFubenBossSingleData repeatedChallengeLogin = BuildLogin(player, null);
+            AssertEqual(eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId,
+                repeatedChallengeLogin.FubenBossSingleData.ChallengeSectionId,
+                "Pain Cage intensive section is stable within an activity");
+            AssertEqual(eligibleChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId,
+                repeatedChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId,
+                "Pain Cage intensive feature group is stable within an activity");
             int previousActivity = player.SimulatedBattlefield.BossActivityNo;
             long rolloverTime = DateTimeOffset.UtcNow.AddDays(8).ToUnixTimeSeconds();
             NotifyFubenBossSingleData rolloverLogin = BuildLogin(player, rolloverTime);
