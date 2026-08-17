@@ -54,33 +54,52 @@ internal static partial class Program
                     : ((TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule)?)null)
                 .Where(pair => pair is not null && pair.Value.Schedule.Source.StartsWith("version-history:", StringComparison.Ordinal))
                 .Select(pair => pair!.Value)
-                .OrderBy(pair => pair.Activity.Id)
+                .OrderBy(pair => pair.Schedule.StartTime)
+                .ThenBy(pair => pair.Activity.Id)
                 .ToList();
-        if (transfiniteRotations.Count != 2 || ActivityScheduleService.All.Any(schedule =>
-                schedule.Source == "policy:latest-TransfiniteActivity-always-open"))
-            throw new InvalidDataException("4.6 Transfinite must expose only the two version-history-derived rotations.");
+        if (transfiniteRotations.Count < 2 || transfiniteRotations.Any(pair => pair.Activity.CycleSeconds <= 0))
+            throw new InvalidDataException("4.6 Transfinite needs at least two authoritative version-history anchors with positive cycles.");
         Player scheduledTransfinitePlayer = CreateDrawCompatibilityPlayer(46_101);
         void PrepareTransfinite(long timestamp) => prepareTransfinite.Invoke(null, [scheduledTransfinitePlayer, timestamp]);
-        PrepareTransfinite(transfiniteRotations[0].Schedule.StartTime - 1);
-        AssertEqual(null, scheduledTransfinitePlayer.Transfinite, "Transfinite is unauthorized before the first 4.6 rotation");
-        PrepareTransfinite(transfiniteRotations[0].Schedule.StartTime);
+        (TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule) firstRotation = transfiniteRotations[0];
+        (TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule) nextRotation = transfiniteRotations[1];
+        (TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule) terminalRotation = transfiniteRotations[^1];
+        PrepareTransfinite(firstRotation.Schedule.StartTime - 1);
+        AssertEqual(null, scheduledTransfinitePlayer.Transfinite, "Transfinite is unauthorized before its first anchor");
+        PrepareTransfinite(firstRotation.Schedule.StartTime);
         TransfiniteState firstTransfinite = scheduledTransfinitePlayer.Transfinite
-            ?? throw new InvalidDataException("Transfinite did not authorize at its first schedule boundary.");
-        AssertEqual(transfiniteRotations[0].Activity.Id, firstTransfinite.ActivityId, "Transfinite selects the first open activity");
-        AssertEqual(
-            transfiniteRotations[0].Schedule.StartTime,
-            firstTransfinite.BeginTime,
-            "Transfinite anchors the first rotation to its schedule");
-        PrepareTransfinite(transfiniteRotations[1].Schedule.StartTime);
-        TransfiniteState secondTransfinite = scheduledTransfinitePlayer.Transfinite
-            ?? throw new InvalidDataException("Transfinite did not switch at its second schedule boundary.");
-        AssertEqual(transfiniteRotations[1].Activity.Id, secondTransfinite.ActivityId, "Transfinite selects the highest open activity");
-        AssertEqual(
-            transfiniteRotations[1].Schedule.StartTime,
-            secondTransfinite.BeginTime,
-            "Transfinite anchors the second rotation to its schedule");
-        PrepareTransfinite(transfiniteRotations[1].Schedule.EndTime);
-        AssertEqual(0L, scheduledTransfinitePlayer.Transfinite!.ActivityAuthorizedUntil, "Transfinite clears authorization after its 4.6 windows");
+            ?? throw new InvalidDataException("Transfinite did not authorize at its first anchor.");
+        AssertEqual(firstRotation.Activity.Id, firstTransfinite.ActivityId, "Transfinite selects the first anchor");
+        AssertEqual(firstRotation.Schedule.StartTime, firstTransfinite.BeginTime, "Transfinite anchors its first cycle");
+        AssertEqual(nextRotation.Schedule.StartTime, firstTransfinite.ActivityAuthorizedUntil,
+            "Transfinite authorization ends at the next anchor");
+        PrepareTransfinite(nextRotation.Schedule.StartTime);
+        TransfiniteState nextTransfinite = scheduledTransfinitePlayer.Transfinite
+            ?? throw new InvalidDataException("Transfinite did not switch at its next anchor.");
+        AssertEqual(nextRotation.Activity.Id, nextTransfinite.ActivityId, "Transfinite selects the next anchor");
+        AssertEqual(nextRotation.Schedule.StartTime, nextTransfinite.BeginTime, "Transfinite anchors its next cycle");
+        PrepareTransfinite(terminalRotation.Schedule.EndTime);
+        TransfiniteState terminalTransfinite = scheduledTransfinitePlayer.Transfinite
+            ?? throw new InvalidDataException("Transfinite closed at its terminal extracted end.");
+        AssertEqual(terminalRotation.Activity.Id, terminalTransfinite.ActivityId,
+            "Transfinite remains on its terminal anchor after the extracted end");
+        AssertEqual(long.MaxValue, terminalTransfinite.ActivityAuthorizedUntil,
+            "Transfinite terminal authorization is perpetual");
+        long previousRolloverBeginTime = 0;
+        foreach (long cycle in new[] { 1L, 2L })
+        {
+            long timestamp = terminalRotation.Schedule.StartTime + cycle * terminalRotation.Activity.CycleSeconds;
+            PrepareTransfinite(timestamp);
+            TransfiniteState rollover = scheduledTransfinitePlayer.Transfinite
+                ?? throw new InvalidDataException($"Transfinite did not roll over cycle {cycle}.");
+            AssertEqual(terminalRotation.Activity.Id, rollover.ActivityId, $"Transfinite terminal cycle {cycle} activity");
+            AssertEqual(timestamp, rollover.BeginTime, $"Transfinite terminal cycle {cycle} begin");
+            if (previousRolloverBeginTime > 0)
+                AssertEqual(true, rollover.BeginTime > previousRolloverBeginTime,
+                    $"Transfinite terminal cycle {cycle} advances begin time");
+            previousRolloverBeginTime = rollover.BeginTime;
+            AssertEqual(long.MaxValue, rollover.ActivityAuthorizedUntil, $"Transfinite terminal cycle {cycle} authorization");
+        }
 
         // With no authoritative time-window source, configured rows alone must never open either activity.
         Player inactive = CreateDrawCompatibilityPlayer(46_001);
@@ -676,7 +695,13 @@ internal static partial class Program
             MongoCollectionOverride.InstallForTransfiniteCompatibility(
                 out RecordingMongoCollectionProxy<Player> transfinitePlayerCollection,
                 out RecordingMongoCollectionProxy<Inventory> transfiniteInventoryCollection);
-        const long transfiniteLoginNow = 1784318400;
+        long transfiniteLoginNow = TableReaderV2.Parse<TransfiniteActivityTable>()
+            .Select(activity => ActivityScheduleService.TryGet(activity.TimeId, out ActivityScheduleEntry schedule)
+                && schedule.Source.StartsWith("version-history:", StringComparison.Ordinal)
+                    ? schedule.StartTime
+                    : 0L)
+            .Where(startTime => startTime > 0)
+            .Max();
         MethodInfo prepareTransfiniteLogin = RequiredMethod(
             RequiredAscNetGameServerType("AscNet.GameServer.Handlers.TransfiniteModule"),
             "PrepareLogin",
@@ -1086,10 +1111,18 @@ internal static partial class Program
             _ = GetRegisteredRequestHandlerMethod(request);
 
         // Capture flow begins at progress 0 with the first stage one-based for display.
-        TransfiniteActivityTable activity = TableReaderV2.Parse<TransfiniteActivityTable>()
-            .First(row => ActivityScheduleService.TryGet(row.TimeId, out ActivityScheduleEntry schedule)
-                && schedule.Source.StartsWith("version-history:", StringComparison.Ordinal));
-        ActivityScheduleService.TryGet(activity.TimeId, out ActivityScheduleEntry activeSchedule);
+        (TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule) terminalFlowRotation =
+            TableReaderV2.Parse<TransfiniteActivityTable>()
+                .Select(row => ActivityScheduleService.TryGet(row.TimeId, out ActivityScheduleEntry schedule)
+                    ? (Activity: row, Schedule: schedule)
+                    : ((TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule)?)null)
+                .Where(pair => pair is not null && pair.Value.Schedule.Source.StartsWith("version-history:", StringComparison.Ordinal))
+                .Select(pair => pair!.Value)
+                .OrderBy(pair => pair.Schedule.StartTime)
+                .ThenBy(pair => pair.Activity.Id)
+                .Last();
+        TransfiniteActivityTable activity = terminalFlowRotation.Activity;
+        ActivityScheduleEntry activeSchedule = terminalFlowRotation.Schedule;
         long flowPlayerId = 46_181;
         Player flowPlayer = CreateDrawCompatibilityPlayer(flowPlayerId);
         flowPlayer.PlayerData.Level = 80;
@@ -1232,8 +1265,8 @@ internal static partial class Program
         int validBattleSaves = flowPlayerCollection.ReplaceOneCalls;
         prepare.Invoke(null, [flowPlayer, activeSchedule.StartTime]);
         AssertEqual(flowGroup, flowState.BattleInfo?.StageGroupId, "Transfinite same-circle active battle remains");
-        AssertEqual(validBattleSaves + 1, flowPlayerCollection.ReplaceOneCalls,
-            "Transfinite same-circle active battle metadata refresh persists");
+        AssertEqual(validBattleSaves, flowPlayerCollection.ReplaceOneCalls,
+            "Transfinite same-circle active battle does not persist redundant metadata");
         flowState.ActivityAuthorizedUntil = long.MaxValue;
         int fightStageId = TableReaderV2.Parse<TransfiniteStageGroupTable>()
             .Single(group => group.StageGroupId == flowGroup).StageId[0];

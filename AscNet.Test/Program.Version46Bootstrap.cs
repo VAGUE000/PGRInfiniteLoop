@@ -17,6 +17,7 @@ using AscNet.Table.V2.share.guide;
 using AscNet.Table.V2.share.player;
 using AscNet.Table.V2.share.fuben.bossinshot;
 using AscNet.Table.V2.share.fuben.fashionstory;
+using AscNet.Table.V2.share.fuben.transfinite;
 using AscNet.Table.V2.share.miniactivity.dyemerge;
 using AscNet.Table.V2.share.theatre6;
 using AscNet.Table.V2.share.equip;
@@ -124,14 +125,28 @@ internal partial class Program
             throw new InvalidDataException("Stale 4.5 Battle Screen TimeId appeared in the 4.6 schedule.");
         if (ActivityScheduleService.IsOpen(45001, current))
             throw new InvalidDataException("Historical 4.5 TimeId appeared in the 4.6 schedule.");
-        List<ActivityScheduleEntry> transfiniteRotations = ActivityScheduleService.All
-            .Where(schedule => schedule.Source.Contains("/TransfiniteActivity", StringComparison.Ordinal))
-            .OrderBy(schedule => schedule.StartTime)
-            .ToList();
-        if (transfiniteRotations.Count != 2
-            || transfiniteRotations.Any(schedule => schedule.StartTime == 0 || schedule.EndTime <= schedule.StartTime)
-            || ActivityScheduleService.All.Any(schedule => schedule.Source == "policy:latest-TransfiniteActivity-always-open"))
-            throw new InvalidDataException("4.6 Transfinite schedule was not derived from bounded EN version history.");
+        List<(TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule)> transfiniteRotations =
+            TableReaderV2.Parse<TransfiniteActivityTable>()
+                .Select(activity => ActivityScheduleService.TryGet(activity.TimeId, out ActivityScheduleEntry schedule)
+                    ? (Activity: activity, Schedule: schedule)
+                    : ((TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule)?)null)
+                .Where(pair => pair is not null && pair.Value.Schedule.Source.StartsWith("version-history:", StringComparison.Ordinal))
+                .Select(pair => pair!.Value)
+                .OrderBy(pair => pair.Schedule.StartTime)
+                .ThenBy(pair => pair.Activity.Id)
+                .ToList();
+        if (transfiniteRotations.Count < 2 || transfiniteRotations.Any(pair => pair.Activity.CycleSeconds <= 0))
+            throw new InvalidDataException("4.6 Transfinite needs authoritative version-history anchors with positive cycles.");
+        for (int index = 0; index < transfiniteRotations.Count; index++)
+        {
+            (TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule) rotation = transfiniteRotations[index];
+            TimeLimitCtrlConfigList control = timeControls.Single(entry => entry.Id == rotation.Activity.TimeId);
+            AssertEqual(rotation.Schedule.StartTime, control.StartTime, $"4.6 Transfinite {rotation.Activity.TimeId} control start");
+            AssertEqual(
+                index + 1 < transfiniteRotations.Count ? transfiniteRotations[index + 1].Schedule.StartTime : 0L,
+                control.EndTime,
+                $"4.6 Transfinite {rotation.Activity.TimeId} control end");
+        }
         MethodInfo calendarBuilder = RequiredMethod(
             RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule"),
             "BuildNewActivityCalendarPayload",

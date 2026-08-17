@@ -39,6 +39,17 @@ internal static class TransfiniteModule
     // XItemManager.ItemId.TransfiniteScore = 105 in the authoritative client enum.
     private const int TransfiniteScoreItemId = 105;
     private static readonly Lazy<Dictionary<int, TransfiniteActivityTable>> Activities = new(() => TableReaderV2.Parse<TransfiniteActivityTable>().ToDictionary(x => x.Id));
+    private static readonly Lazy<IReadOnlyList<(TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule, long EndTime)>> AnchoredActivities = new(() =>
+    {
+        (TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule)[] anchors = Activities.Value.Values
+            .Select(activity => (Activity: activity, Schedule: ActivityScheduleService.TryGet(activity.TimeId, out ActivityScheduleEntry schedule) ? schedule : default))
+            .Where(anchor => anchor.Schedule.Id != 0 && anchor.Schedule.Source.StartsWith("version-history:", StringComparison.Ordinal))
+            .OrderBy(anchor => anchor.Schedule.StartTime)
+            .ThenBy(anchor => anchor.Schedule.Id)
+            .ToArray();
+        return anchors.Select((anchor, index) => (anchor.Activity, anchor.Schedule,
+            EndTime: index + 1 < anchors.Length ? anchors[index + 1].Schedule.StartTime : long.MaxValue)).ToArray();
+    });
     private static readonly Lazy<List<TransfiniteRegionTable>> Regions = new(() => TableReaderV2.Parse<TransfiniteRegionTable>());
     private static readonly Lazy<Dictionary<int, TransfiniteRotateGroupTable>> Rotates = new(() => TableReaderV2.Parse<TransfiniteRotateGroupTable>().ToDictionary(x => x.RotateGroupId));
     private static readonly Lazy<Dictionary<int, TransfiniteStageGroupTable>> Groups = new(() => TableReaderV2.Parse<TransfiniteStageGroupTable>().ToDictionary(x => x.StageGroupId));
@@ -49,13 +60,12 @@ internal static class TransfiniteModule
     private static readonly Lazy<HashSet<int>> GeneralSkills = new(() => TableReaderV2.Parse<CharacterGeneralSkillTable>().Select(x => x.Id).ToHashSet());
     private static readonly Lazy<Dictionary<int, ItemTable>> Items = new(() => TableReaderV2.Parse<ItemTable>().ToDictionary(x => x.Id));
     internal static bool IsStage(uint id) => id <= int.MaxValue && Stages.Value.ContainsKey((int)id);
-    private static bool Authorized(TransfiniteState? x) => x is not null && x.ActivityAuthorizedUntil >= DateTimeOffset.UtcNow.ToUnixTimeSeconds() && Activities.Value.ContainsKey(x.ActivityId);
+    private static bool Authorized(TransfiniteState? x) => x is not null && x.ActivityAuthorizedUntil > DateTimeOffset.UtcNow.ToUnixTimeSeconds() && Activities.Value.ContainsKey(x.ActivityId);
 
     internal static void PrepareLogin(Player player, long now)
     {
-        DateTimeOffset time = DateTimeOffset.FromUnixTimeSeconds(now);
-        TransfiniteActivityTable? activity = Activities.Value.Values.Where(x => ActivityScheduleService.TryGet(x.TimeId, out ActivityScheduleEntry s) && s.IsOpen(time)).OrderByDescending(x => x.Id).FirstOrDefault();
-        if (activity is null || !ActivityScheduleService.TryGet(activity.TimeId, out ActivityScheduleEntry schedule) || !Select(activity, schedule, (int)player.PlayerData.Level, now, out TransfiniteState? next))
+        var anchor = GetAnchoredActivities().LastOrDefault(x => x.Schedule.StartTime <= now);
+        if (anchor.Activity is null || !Select(anchor.Activity, anchor.Schedule, (int)player.PlayerData.Level, now, out TransfiniteState? next))
         {
             if (player.Transfinite is { ActivityAuthorizedUntil: not 0 } inactive)
             {
@@ -64,7 +74,7 @@ internal static class TransfiniteModule
             }
             return;
         }
-        next!.ActivityAuthorizedUntil = schedule.EndTime == 0 ? long.MaxValue : schedule.EndTime;
+        next!.ActivityAuthorizedUntil = anchor.EndTime;
         if (player.Transfinite is { } old)
         {
             if (old.ActivityId == next.ActivityId && old.CircleId == next.CircleId)
@@ -93,9 +103,9 @@ internal static class TransfiniteModule
                 outgoing = Math.Max(outgoing, old.BattleInfo.StageProgressIndex);
             if (old.ActivityId == next.ActivityId)
             {
-                int anchor = StartProgress.Value.Where(x => x.LastProgress <= outgoing).OrderByDescending(x => x.LastProgress).Select(x => x.StartProgress).FirstOrDefault();
-                if (anchor > 0)
-                    next.BattleInfo = new() { StageGroupId = next.StageGroupId, StageProgressIndex = anchor - 1, StartStageProgress = anchor };
+                int progressAnchor = StartProgress.Value.Where(x => x.LastProgress <= outgoing).OrderByDescending(x => x.LastProgress).Select(x => x.StartProgress).FirstOrDefault();
+                if (progressAnchor > 0)
+                    next.BattleInfo = new() { StageGroupId = next.StageGroupId, StageProgressIndex = progressAnchor - 1, StartStageProgress = progressAnchor };
                 next.MaxRotateStageProgressIndex = outgoing;
             }
             next.RotateSettleInfo = new() { RotationId = old.CircleId, RegionId = old.RegionId, MaxStageProgressIndex = outgoing, ScoreRewardGroupId = 0 };
@@ -122,6 +132,7 @@ internal static class TransfiniteModule
         state = new() { ActivityId = activity.Id, CircleId = (int)circle, BeginTime = begin, RegionId = region.RegionId, StageGroupIndex = index, StageGroupId = group, ScoreRewardGroupId = region.ScoreRewardGroupId };
         return true;
     }
+    internal static IReadOnlyList<(TransfiniteActivityTable Activity, ActivityScheduleEntry Schedule, long EndTime)> GetAnchoredActivities() => AnchoredActivities.Value;
     internal static NotifyTransfiniteData BuildNotify(Player player) => Authorized(player.Transfinite) ? new() { TransfiniteData = ToWire(player.Transfinite!) } : new();
 
     [RequestPacketHandler("TransfiniteSetTeamRequest")]

@@ -513,6 +513,15 @@ namespace AscNet.GameServer.Handlers
                     StartTime = row.StartTime,
                     EndTime = row.EndTime
                 });
+            foreach (var anchor in TransfiniteModule.GetAnchoredActivities())
+            {
+                controls[anchor.Schedule.Id] = new()
+                {
+                    Id = anchor.Schedule.Id,
+                    StartTime = anchor.Schedule.StartTime,
+                    EndTime = anchor.EndTime == long.MaxValue ? 0 : anchor.EndTime
+                };
+            }
 
             void AddDerived(long id, long startTime, long endTime)
             {

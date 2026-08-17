@@ -99,6 +99,11 @@ namespace AscNet.Test
                     ValidateTransfiniteCompatibility();
                     return;
                 }
+                if (args.Contains("--version-46-activity-compat-only"))
+                {
+                    ValidateVersion46ActivityCompatibility();
+                    return;
+                }
                 if (args.Contains("--version-46-compat-only"))
                 {
                     ValidateVersion46BootstrapCompatibility();
