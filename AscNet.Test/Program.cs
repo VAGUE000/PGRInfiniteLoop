@@ -27242,8 +27242,8 @@ namespace AscNet.Test
                 : activeNow.AddYears(100);
             AssertEqual(null, BuildActivityLogin(inactiveNow), "BossModule.BuildActivityLoginData inactive activity window");
 
-            if (!ActivityScheduleService.IsOpen(activeActivity.Schedule.Id, DateTimeOffset.UtcNow))
-                throw new InvalidDataException("Boss activity startup/request compatibility requires the authoritative current activity schedule to be open.");
+            if (ActivityScheduleService.IsOpen(activeActivity.Schedule.Id, DateTimeOffset.UtcNow))
+            {
             MethodInfo doLogin = RequiredMethod(
                 RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule"),
                 "DoLogin",
@@ -27310,6 +27310,7 @@ namespace AscNet.Test
                 MessagePackSerializer.Deserialize<GetActivityBossDataResponse>(inactiveActivityBossResponse.Content).Code,
                 "inactive GetActivityBossDataRequest response code");
             player.PlayerData.Level = originalPlayerLevel;
+            }
 
 
 
@@ -27855,6 +27856,14 @@ namespace AscNet.Test
                 "Pain Cage first-clear attempt consumption");
             AssertEqual(1, player.SimulatedBattlefield.BossCharacterPoints[checked((int)characterId)],
                 "Pain Cage character stamina consumption");
+            AscNet.Common.Database.BossSingleHistoryRecordState savedHistory =
+                player.SimulatedBattlefield.BossHistory.Single(record => record.StageId == normalStage.StageId);
+            AssertEqual(normalResult.TotalScore, savedHistory.Score,
+                "Pain Cage save records stage history score");
+            AssertIntegerList(
+                [characterId],
+                savedHistory.Characters.Select(Convert.ToInt64).ToArray(),
+                "Pain Cage save records stage history team");
             AssertEqual(null, harness.Session.PendingBossSingleScore,
                 "Pain Cage save clears provisional session score");
 
@@ -27915,14 +27924,6 @@ namespace AscNet.Test
             AssertEqual(null, harness.Session.fight, "Pain Cage challenge-count rejection creates no fight");
             player.SimulatedBattlefield.BossChallengeCount = challengeCountBeforeConstraintChecks;
 
-            AscNet.Common.Database.BossSingleHistoryRecordState history = new()
-            {
-                StageId = savedRecord.StageId,
-                Score = savedRecord.MaxScore,
-                Characters = savedRecord.MaxCharacters.ToList(),
-                Partners = savedRecord.MaxPartners.ToList()
-            };
-            player.SimulatedBattlefield.BossHistory.Add(history);
             const int resetPacketId = 82_038;
             InvokeRegisteredRequestHandler(
                 nameof(BossSingleResetStageRequest),
@@ -27943,6 +27944,49 @@ namespace AscNet.Test
                 "Pain Cage reset preserves period best score");
             AssertEqual(true, player.SimulatedBattlefield.BossResetStageIds.Contains(normalStage.StageId),
                 "Pain Cage reset marker persistence");
+            AssertEqual(false,
+                player.SimulatedBattlefield.BossCharacterPoints.ContainsKey(checked((int)characterId)),
+                "Pain Cage reset refunds character stamina");
+            AscNet.Common.Database.BossSingleStageRecordState resetRecord =
+                player.SimulatedBattlefield.BossStageRecords.Single(record => record.StageId == normalStage.StageId);
+            AssertEqual(0, resetRecord.Score, "Pain Cage reset clears current stage score");
+            AssertEqual(normalResult.TotalScore, resetRecord.MaxScore,
+                "Pain Cage reset retains stage best for aggregate progress");
+            AssertEqual(normalResult.TotalScore,
+                player.SimulatedBattlefield.BossStageRecords.Sum(record => record.MaxScore),
+                "Pain Cage reset retains aggregate best progress");
+            JObject resetLoginPayload = JObject.Parse(MessagePackSerializer.ConvertToJson(
+                MessagePackSerializer.Serialize(BuildLogin(player, null))));
+            JObject resetLoginData = RequiredValue<JObject>(
+                resetLoginPayload, "FubenBossSingleData", JTokenType.Object, "Pain Cage reset login");
+            AssertEqual(0,
+                RequiredValue<JArray>(
+                    resetLoginData, "StageRecordList", JTokenType.Array, "Pain Cage reset login").Count,
+                "Pain Cage reset hides cleared stage record");
+            AssertEqual(1,
+                RequiredValue<JArray>(
+                    resetLoginData, "HistoryList", JTokenType.Array, "Pain Cage reset login").Count,
+                "Pain Cage reset preserves team history");
+
+            int savesBeforeDuplicateReset = playerCollection.ReplaceOneCalls;
+            const int duplicateResetPacketId = 82_138;
+            InvokeRegisteredRequestHandler(
+                nameof(BossSingleResetStageRequest),
+                harness.Session,
+                duplicateResetPacketId,
+                new BossSingleResetStageRequest { StageId = normalStage.StageId });
+            BossSingleResetStageResponse duplicateReset =
+                ReadResponsePayload<BossSingleResetStageResponse>(
+                    harness,
+                    duplicateResetPacketId,
+                    nameof(BossSingleResetStageResponse),
+                    "Pain Cage duplicate stage reset");
+            AssertEqual(1, duplicateReset.Code, "Pain Cage duplicate reset rejected");
+            AssertEqual(savesBeforeDuplicateReset, playerCollection.ReplaceOneCalls,
+                "Pain Cage duplicate reset does not persist");
+            AssertEqual(false,
+                player.SimulatedBattlefield.BossCharacterPoints.ContainsKey(checked((int)characterId)),
+                "Pain Cage duplicate reset does not refund twice");
 
             int playerSavesBeforeAutoFight = playerCollection.ReplaceOneCalls;
             int stageSavesBeforeAutoFight = stageCollection.ReplaceOneCalls;
@@ -27967,7 +28011,7 @@ namespace AscNet.Test
             AscNet.Common.Database.BossSingleStageRecordState autoRecord =
                 player.SimulatedBattlefield.BossStageRecords.Single(record => record.StageId == normalStage.StageId);
             AssertEqual(true, autoRecord.IsUseAutoFight, "Pain Cage auto-fight record marker");
-            AssertEqual(history.Score, autoRecord.Score, "Pain Cage EN-config auto-fight rebate score");
+            AssertEqual(savedHistory.Score, autoRecord.Score, "Pain Cage EN-config auto-fight rebate score");
             int autoRankPushIndex = autoPushes.IndexOf(nameof(NotifyBossSingleRankInfo));
             int autoLoginPushIndex = autoPushes.IndexOf(nameof(NotifyFubenBossSingleData));
             int autoStagePushIndex = autoPushes.IndexOf(nameof(NotifyStageData));

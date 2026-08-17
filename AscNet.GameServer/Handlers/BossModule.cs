@@ -367,16 +367,28 @@ namespace AscNet.GameServer.Handlers
             BossSingleResetStageRequest request = packet.Deserialize<BossSingleResetStageRequest>();
             SimulatedBattlefieldState state = session.player.SimulatedBattlefield;
             BossSingleStageRecordState? record = state.BossStageRecords.Find(value => value.StageId == request.StageId);
-            if (record is null || !TryResolveNormalStage(state, request.StageId, out _, out _))
+            if (record is null
+                || state.BossResetStageIds.Contains(request.StageId)
+                || !TryResolveNormalStage(state, request.StageId, out _, out _))
             {
                 session.SendResponse(new BossSingleResetStageResponse { Code = 1 }, packet.Id);
                 return;
             }
 
-            state.BossStageRecords.Remove(record);
-            if (!state.BossResetStageIds.Contains(request.StageId))
-                state.BossResetStageIds.Add(request.StageId);
+            foreach (int characterId in record.Characters.Distinct())
+            {
+                int points = state.BossCharacterPoints.GetValueOrDefault(characterId);
+                if (points <= 1)
+                    state.BossCharacterPoints.Remove(characterId);
+                else
+                    state.BossCharacterPoints[characterId] = points - 1;
+            }
+            record.Score = 0;
+            record.Characters.Clear();
+            record.IsUseAutoFight = false;
+            state.BossResetStageIds.Add(request.StageId);
             state.BossCurrentTotalScore = state.BossStageRecords.Sum(value => value.Score);
+            session.PendingBossSingleScore = null;
             session.player.Save();
             session.SendPush(BuildLoginData(session.player));
             session.SendResponse(new BossSingleResetStageResponse { Code = 0 }, packet.Id);
@@ -565,6 +577,7 @@ namespace AscNet.GameServer.Handlers
                     ChallengeDeleteRecordTime = 0,
                     IsResetOpen = true,
                     StageRecordList = state.BossStageRecords
+                        .Where(record => !state.BossResetStageIds.Contains(record.StageId))
                         .OrderBy(record => record.StageId)
                         .Select(record => (dynamic)new Dictionary<string, object>
                         {
@@ -764,6 +777,7 @@ namespace AscNet.GameServer.Handlers
                 record.MaxCharacters = pending.Characters.ToList();
                 record.MaxPartners = pending.Partners.ToList();
             }
+            ArchiveRecord(state, record);
 
             state.BossResetStageIds.Remove(pending.StageId);
             state.BossNormalStageTeams[pending.SectionId] = pending.Characters.ToList();
@@ -998,19 +1012,24 @@ namespace AscNet.GameServer.Handlers
         private static void ArchiveCurrentRecords(SimulatedBattlefieldState state)
         {
             foreach (BossSingleStageRecordState record in state.BossStageRecords)
+                ArchiveRecord(state, record);
+        }
+
+        private static void ArchiveRecord(
+            SimulatedBattlefieldState state,
+            BossSingleStageRecordState record)
+        {
+            BossSingleHistoryRecordState? history = state.BossHistory.Find(value => value.StageId == record.StageId);
+            if (history is not null && history.Score >= record.MaxScore)
+                return;
+            if (history is null)
             {
-                BossSingleHistoryRecordState? history = state.BossHistory.Find(value => value.StageId == record.StageId);
-                if (history is not null && history.Score >= record.MaxScore)
-                    continue;
-                if (history is null)
-                {
-                    history = new BossSingleHistoryRecordState { StageId = record.StageId };
-                    state.BossHistory.Add(history);
-                }
-                history.Score = record.MaxScore;
-                history.Characters = record.MaxCharacters.ToList();
-                history.Partners = record.MaxPartners.ToList();
+                history = new BossSingleHistoryRecordState { StageId = record.StageId };
+                state.BossHistory.Add(history);
             }
+            history.Score = record.MaxScore;
+            history.Characters = record.MaxCharacters.ToList();
+            history.Partners = record.MaxPartners.ToList();
         }
 
         private static Dictionary<int, List<int>> BuildBossListOptions(
@@ -1154,9 +1173,11 @@ namespace AscNet.GameServer.Handlers
             int stageId,
             IReadOnlyCollection<int> characters)
         {
+            if (state.BossResetStageIds.Contains(stageId))
+                return 1;
             BossSingleStageRecordState? record = state.BossStageRecords.Find(value => value.StageId == stageId);
             if (record is null)
-                return state.BossResetStageIds.Contains(stageId) ? 1 : 0;
+                return 0;
             return record.Characters.SequenceEqual(characters) ? 2 : 3;
         }
 
