@@ -94,6 +94,11 @@ namespace AscNet.Test
                     ValidateAwarenessCompatibility();
                     return;
                 }
+                if (args.Contains("--assign-compat-only"))
+                {
+                    ValidateAssignCompatibility();
+                    return;
+                }
                 if (args.Contains("--transfinite-compat-only"))
                 {
                     ValidateTransfiniteCompatibility();

@@ -714,6 +714,7 @@ namespace AscNet.GameServer.Handlers
                 FunctionOpenTimeConfigList = BuildFunctionOpenTimeConfigList(timeLimitControls),
                 DlcPlayerData = new(),
                 DlcCharacterList = session.character.Characters.Select(ToDlcCharacter).ToList(),
+                AssignChapterRecord = AssignModule.BuildLoginChapterRecords(session),
                 RedPointRecords = session.player.RedPointRecords ?? new()
             };
             if (notifyLogin.PlayerData.DisplayCharIdList.Count < 1)
