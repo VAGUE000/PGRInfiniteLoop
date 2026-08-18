@@ -505,6 +505,15 @@ namespace AscNet.GameServer.Handlers
                     return;
                 }
             }
+            if (AssignModule.ApplyPreFight(session, req.PreFightData, out int assignCode))
+            {
+                if (assignCode != 0)
+                {
+                    rsp.Code = assignCode;
+                    session.SendResponse(rsp, packet.Id);
+                    return;
+                }
+            }
 
 
             if (BossInshotModule.ValidatePreFightRequest(session, req.PreFightData, out int bossInshotValidationCode)
@@ -2251,6 +2260,17 @@ namespace AscNet.GameServer.Handlers
                     TaskModule.SendTaskSync(session);
                 }
                 session.SendResponse(awarenessResponse, packet.Id);
+                return;
+            }
+            if (AssignModule.TrySettle(session, req.Result, out FightSettleResponse assignResponse))
+            {
+                session.fight = null;
+                if (assignResponse.Code == 0 && assignResponse.Settle?.IsWin == true)
+                {
+                    session.SendPush(new NotifyArchiveMonsterRecord());
+                    TaskModule.SendTaskSync(session);
+                }
+                session.SendResponse(assignResponse, packet.Id);
                 return;
             }
             if (!req.Result.IsForceExit
