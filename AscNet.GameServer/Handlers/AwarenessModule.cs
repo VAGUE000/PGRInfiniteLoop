@@ -1,10 +1,7 @@
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
-using AscNet.Table.V2.share.equip;
-using AscNet.Table.V2.share.condition;
 using AscNet.Table.V2.share.fuben.awareness;
-using AscNet.Table.V2.share.exhibition;
 using MessagePack;
 
 namespace AscNet.GameServer.Handlers;
@@ -149,17 +146,6 @@ internal static class AwarenessModule
     private static void SendCharacter(Session s, Packet.Request p, int code = 0) => s.SendResponse(new AwarenessSetCharacterResponse { Code = code }, p.Id);
     private static void SendTeam(Session s, Packet.Request p, int code = 0) => s.SendResponse(new AwarenessSetTeamResponse { Code = code }, p.Id);
     private static void SendReset(Session s, Packet.Request p, int code = 0) => s.SendResponse(new AwarenessResetStageResponse { Code = code }, p.Id);
-    private static bool CanSelect(Session s, AwarenessChapterTable chapter, CharacterData character)
-    {
-        if (chapter.SelectCharCondition.Count == 0) return false;
-        Dictionary<uint, EquipTable> equips = TableReaderV2.Parse<EquipTable>().ToDictionary(x => (uint)x.Id);
-        return chapter.SelectCharCondition.All(id => TableReaderV2.Parse<ConditionTable>().FirstOrDefault(x => x.Id == id) is { } c && c.Type switch
-        {
-            13103 when c.Params.Count == 1 => character.Level >= c.Params[0],
-            13108 when c.Params.Count == 1 => character.Ability == 0 || character.Ability >= c.Params[0],
-            13114 when c.Params.Count == 1 => TableReaderV2.Parse<ExhibitionRewardTable>().Any(reward => reward.CharacterId == character.Id && reward.LevelId >= c.Params[0] && s.player.GatherRewards.Contains(reward.Id)),
-            13118 when c.Params.Count == 1 => s.character.Equips.Where(x => x.CharacterId == character.Id && equips.TryGetValue(x.TemplateId, out EquipTable? row) && row.Site is >= 1 and <= 6).Sum(x => x.ResonanceInfo.Count(r => r.CharacterId == character.Id && x.AwakeSlotList.Any(slot => Convert.ToInt32(slot) == r.Slot))) >= c.Params[0],
-            _ => false
-        });
-    }
+    private static bool CanSelect(Session s, AwarenessChapterTable chapter, CharacterData character) =>
+        ExhibitionModule.MeetsCharacterConditions(s, character, chapter.SelectCharCondition);
 }

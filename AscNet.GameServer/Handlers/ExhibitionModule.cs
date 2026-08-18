@@ -40,27 +40,33 @@ namespace AscNet.GameServer.Handlers
                 && character.LiberateLv < precedingReward.LevelId)
                 return false;
 
-            foreach (int conditionId in reward.ConditionIds)
-            {
-                ConditionTable? condition = TableReaderV2.Parse<ConditionTable>()
-                    .FirstOrDefault(candidate => candidate.Id == conditionId);
-                if (condition is null || !MeetsPrerequisite(session, character, condition))
-                    return false;
-            }
+            if (reward.ConditionIds.Count > 0
+                && !MeetsCharacterConditions(session, character, reward.ConditionIds))
+                return false;
             return true;
         }
 
-        private static bool MeetsPrerequisite(Session session, CharacterData character, ConditionTable condition)
+        internal static bool MeetsCharacterConditions(
+            Session session,
+            CharacterData character,
+            IReadOnlyList<int> conditionIds)
         {
-            return condition.Type switch
-            {
-                13103 when condition.Params.Count == 1 => character.Level >= condition.Params[0],
-                // A zero persisted Ability is the unknown server-computed sentinel; legitimate clients gate their locally calculated value before requesting.
-                13108 when condition.Params.Count == 1 => character.Ability == 0 || character.Ability >= condition.Params[0],
-                13109 when condition.Params.Count == 2 => CountBoundResonances(session, character, condition.Params[0]) >= condition.Params[1],
-                13118 when condition.Params.Count == 1 => CountAwakenedBoundMemoryResonances(session, character) >= condition.Params[0],
-                _ => false
-            };
+            return conditionIds.Count > 0 && conditionIds.All(conditionId =>
+                TableReaderV2.Parse<ConditionTable>().FirstOrDefault(
+                    candidate => candidate.Id == conditionId) is { } condition
+                && condition.Type switch
+                {
+                    13103 when condition.Params.Count == 1 => character.Level >= condition.Params[0],
+                    // A zero persisted Ability is the unknown server-computed sentinel; legitimate clients gate their locally calculated value before requesting.
+                    13108 when condition.Params.Count == 1 => character.Ability == 0 || character.Ability >= condition.Params[0],
+                    13109 when condition.Params.Count == 2 => CountBoundResonances(session, character, condition.Params[0]) >= condition.Params[1],
+                    13114 when condition.Params.Count == 1 => TableReaderV2.Parse<ExhibitionRewardTable>().Any(
+                        reward => reward.CharacterId == character.Id
+                            && reward.LevelId >= condition.Params[0]
+                            && session.player.GatherRewards.Contains(reward.Id)),
+                    13118 when condition.Params.Count == 1 => CountAwakenedBoundMemoryResonances(session, character) >= condition.Params[0],
+                    _ => false
+                });
         }
 
         private static int CountBoundResonances(Session session, CharacterData character, int minimumQuality)

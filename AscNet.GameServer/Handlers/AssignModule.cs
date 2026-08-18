@@ -24,6 +24,7 @@ namespace AscNet.GameServer.Handlers;
 internal static class AssignModule
 {
     internal const int GroupMissing = 20182001, StageMissing = 20182002, StageFinished = 20182003, TeamUnset = 20182004, FightCardCount = 20182005, FightCardMismatch = 20182006, TeamListEmpty = 20182007, TeamCountMismatch = 20182008, DuplicateMember = 20182009, CharacterMissing = 20182010, CharacterOccupied = 20182011, SettleStageMismatch = 20182012, ChapterUnfinished = 20182013, ResetUnfinished = 20182014, FinishedTeamImmutable = 20182015, RewardClaimed = 20182016, RewardMissing = 20182017;
+    internal const int PreGroupUnfinished = 20003140;
 
     private sealed record GroupData(AssignGroupTable Config, int ChapterId);
     private sealed record Data(
@@ -110,6 +111,7 @@ internal static class AssignModule
         if (request.TeamList.Count != group.Config.TeamInfoId.Count || request.CaptainPosList.Count != request.TeamList.Count || request.FirstFightPosList.Count != request.TeamList.Count) { SendTeam(session, packet, TeamCountMismatch); return; }
 
         AssignState state = session.player.Assign ??= new();
+        if (!IsUnlocked(state, group)) { SendTeam(session, packet, PreGroupUnfinished); return; }
         AssignGroupState progress = Group(state, request.GroupId);
         AssignTeamState? existing = state.Teams.FirstOrDefault(team => team.GroupId == request.GroupId);
         for (int index = 0; index < request.TeamList.Count; index++)
@@ -146,7 +148,9 @@ internal static class AssignModule
             SendCharacter(session, packet);
             return;
         }
-        if (session.character.Characters.All(character => character.Id != request.CharacterId)) { SendCharacter(session, packet, CharacterMissing); return; }
+        CharacterData? character = session.character.Characters.FirstOrDefault(character => character.Id == request.CharacterId);
+        if (character is null) { SendCharacter(session, packet, CharacterMissing); return; }
+        if (!ExhibitionModule.MeetsCharacterConditions(session, character, chapter.SelectCharCondition)) { SendCharacter(session, packet, ChapterUnfinished); return; }
         if (state.Chapters.Any(record => record.ChapterId != request.ChapterId && record.CharacterId == request.CharacterId)) { SendCharacter(session, packet, CharacterOccupied); return; }
         Chapter(state, request.ChapterId).CharacterId = request.CharacterId;
         session.player.Save();
@@ -176,10 +180,22 @@ internal static class AssignModule
         if (chapterState.IsGetReward) { SendReward(session, packet, RewardClaimed); return; }
         List<AscNet.Table.V2.share.reward.RewardGoodsTable> configured = RewardHandler.GetRewardGoods(chapter.RewardId);
         if (configured.Count == 0) { SendReward(session, packet, RewardMissing); return; }
-        List<RewardGoods> rewards = RewardHandler.GiveRewards(configured, session);
-        chapterState.IsGetReward = true;
-        session.player.Save();
-        session.SendResponse(new AssignGetRewardResponse { Code = 0, RewardList = rewards }, packet.Id);
+        RewardApplicationResult application;
+        try
+        {
+            application = RewardHandler.ApplyRewardsOnceAndPersist(
+                [new RewardGrant($"assign-chapter:{request.ChapterId}", configured)],
+                session);
+            chapterState.IsGetReward = true;
+            session.player.SaveChecked();
+        }
+        catch
+        {
+            chapterState.IsGetReward = false;
+            throw;
+        }
+        application.SendPushes(session);
+        session.SendResponse(new AssignGetRewardResponse { Code = 0, RewardList = application.RewardGoods }, packet.Id);
     }
 
     internal static bool ApplyPreFight(Session session, PreFightRequest.PreFightRequestPreFightData data, out int code)
@@ -187,6 +203,7 @@ internal static class AssignModule
         code = 0;
         if (!Runtime.Value.ByStage.TryGetValue((int)data.StageId, out GroupData? group)) return false;
         AssignState state = session.player.Assign ??= new();
+        if (!IsUnlocked(state, group)) { code = PreGroupUnfinished; return true; }
         AssignGroupState progress = Group(state, group.Config.GroupId);
         if (progress.Count > 0 || progress.FinishStageIds.Contains((int)data.StageId)) { code = StageFinished; return true; }
         int index = group.Config.StageId.FindIndex(stageId => stageId == (int)data.StageId);
@@ -249,6 +266,10 @@ internal static class AssignModule
     };
 
     private static AssignChapterInfo ToChapterInfo(AssignChapterState state) => new() { ChapterId = state.ChapterId, CharacterId = state.CharacterId, IsGetReward = state.IsGetReward };
+    private static bool IsUnlocked(AssignState state, GroupData group) =>
+        group.Config.PreGroupId is not int predecessorId
+        || predecessorId <= 0
+        || state.Groups.Any(saved => saved.GroupId == predecessorId && saved.Count > 0);
     private static AssignChapterState Chapter(AssignState state, int id) => state.Chapters.FirstOrDefault(record => record.ChapterId == id) ?? Add(state.Chapters, new AssignChapterState { ChapterId = id });
     private static AssignGroupState Group(AssignState state, int id) => state.Groups.FirstOrDefault(record => record.GroupId == id) ?? Add(state.Groups, new AssignGroupState { GroupId = id });
     private static AssignTeamState Team(AssignState state, int id) => state.Teams.FirstOrDefault(record => record.GroupId == id) ?? Add(state.Teams, new AssignTeamState { GroupId = id });
