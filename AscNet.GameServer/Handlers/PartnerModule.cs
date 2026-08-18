@@ -133,6 +133,18 @@ namespace AscNet.GameServer.Handlers
         public int Code;
     }
     [MessagePackObject(true)]
+    public class PartnerBreakAwayRequest
+    {
+        public int PartnerId;
+    }
+
+    [MessagePackObject(true)]
+    public class PartnerBreakAwayResponse
+    {
+        public int Code;
+    }
+
+    [MessagePackObject(true)]
     public class PartnerUpdateLockRequest
     {
         public int PartnerId;
@@ -538,6 +550,31 @@ namespace AscNet.GameServer.Handlers
             partner.IsLock = request.IsLock;
             session.character.Save();
             session.SendResponse(new PartnerUpdateLockResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("PartnerBreakAwayRequest")]
+        public static void PartnerBreakAwayRequestHandler(Session session, Packet.Request packet)
+        {
+            PartnerBreakAwayRequest request = packet.Deserialize<PartnerBreakAwayRequest>();
+            PartnerData? partner = FindPartner(session, request.PartnerId);
+            PartnerTable? partnerConfig = partner is null
+                ? null
+                : TableReaderV2.Parse<PartnerTable>().Find(row => row.Id == partner.TemplateId);
+            if (partner is null || partnerConfig is null || partner.CharacterId == 0)
+            {
+                session.SendResponse(new PartnerBreakAwayResponse { Code = ErrorCode }, packet.Id);
+                return;
+            }
+
+            partner.CharacterId = 0;
+            session.character.NormalizePartnerMainSkillForCarrier(partner);
+            session.character.Save();
+            session.SendPush(new NotifyPartnerDataList
+            {
+                PartnerDataList = [partner],
+                OperateTypes = [3]
+            });
+            session.SendResponse(new PartnerBreakAwayResponse(), packet.Id);
         }
 
         [RequestPacketHandler("PartnerCarryRequest")]

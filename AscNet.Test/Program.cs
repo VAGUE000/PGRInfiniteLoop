@@ -1391,6 +1391,11 @@ namespace AscNet.Test
                 ]
             };
 
+            using MongoCollectionOverride mongoOverride =
+                MongoCollectionOverride.InstallForDailySignInCompatibility(
+                    out _,
+                    out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> characterCollection,
+                    out _);
             using LoopbackSessionHarness harness = new(character, inventory: inventory, sessionId: "partner-progression-test");
             void AssertNoExtraPacket(string name)
             {
@@ -1721,6 +1726,49 @@ namespace AscNet.Test
                 harness.ReadPacket("Motorbolt unequip PartnerCarryResponse"),
                 nameof(PartnerCarryResponse)).Code,
                 "Motorbolt unequip PartnerCarryResponse code");
+
+            int savesBeforeBreakAway = characterCollection.ReplaceOneCalls;
+            InvokeRequestHandler(harness, nameof(PartnerBreakAwayRequest), 17_117,
+                new PartnerBreakAwayRequest { PartnerId = partner.Id });
+            Packet.Push breakAwayPush = MessagePackSerializer.Deserialize<Packet.Push>(
+                harness.ReadPacket("PartnerBreakAwayRequest partner push").Content);
+            AssertEqual(nameof(NotifyPartnerDataList), breakAwayPush.Name, "PartnerBreakAwayRequest push name");
+            NotifyPartnerDataList breakAwayPayload =
+                MessagePackSerializer.Deserialize<NotifyPartnerDataList>(breakAwayPush.Content);
+            AssertIntegerList([partner.Id],
+                breakAwayPayload.PartnerDataList.Select(value => (long)value.Id).ToArray(),
+                "PartnerBreakAwayRequest partner ids");
+            AssertIntegerList([3], breakAwayPayload.OperateTypes.Select(value => (long)value).ToArray(),
+                "PartnerBreakAwayRequest operation types");
+            AssertEqual(0, breakAwayPayload.PartnerDataList.Single().CharacterId,
+                "PartnerBreakAwayRequest pushed unequipped state");
+            AssertEqual(0, ReadResponsePayload<PartnerBreakAwayResponse>(
+                harness.ReadPacket("PartnerBreakAwayResponse"),
+                nameof(PartnerBreakAwayResponse)).Code,
+                "PartnerBreakAwayResponse code");
+            AssertEqual(0, partner.CharacterId, "PartnerBreakAwayRequest durable state");
+            AssertEqual(savesBeforeBreakAway + 1, characterCollection.ReplaceOneCalls,
+                "PartnerBreakAwayRequest persists Character");
+
+            InvokeRequestHandler(harness, nameof(PartnerBreakAwayRequest), 17_118,
+                new PartnerBreakAwayRequest { PartnerId = partner.Id });
+            AssertEqual(1, ReadResponsePayload<PartnerBreakAwayResponse>(
+                harness.ReadPacket("already-unequipped PartnerBreakAwayResponse"),
+                nameof(PartnerBreakAwayResponse)).Code,
+                "already-unequipped PartnerBreakAwayResponse code");
+            AssertEqual(savesBeforeBreakAway + 1, characterCollection.ReplaceOneCalls,
+                "already-unequipped PartnerBreakAwayRequest avoids save");
+            AssertNoExtraPacket("already-unequipped PartnerBreakAwayRequest");
+
+            InvokeRequestHandler(harness, nameof(PartnerBreakAwayRequest), 17_119,
+                new PartnerBreakAwayRequest { PartnerId = int.MaxValue });
+            AssertEqual(1, ReadResponsePayload<PartnerBreakAwayResponse>(
+                harness.ReadPacket("missing PartnerBreakAwayResponse"),
+                nameof(PartnerBreakAwayResponse)).Code,
+                "missing PartnerBreakAwayResponse code");
+            AssertEqual(savesBeforeBreakAway + 1, characterCollection.ReplaceOneCalls,
+                "missing PartnerBreakAwayRequest avoids save");
+            AssertNoExtraPacket("missing PartnerBreakAwayRequest");
         }
 
         private static void AssertPartnerUpdate(Packet packet, PartnerData expected, string name)
