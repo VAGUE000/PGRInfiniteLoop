@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.Options;
@@ -12,9 +12,11 @@ using AscNet.Logging;
 using AscNet.Table.V2.share.equip;
 using AscNet.Table.V2.share.character.quality;
 using AscNet.Table.V2.share.character.grade;
-using AscNet.Table.V2.share.attrib;
+using AscNet.Table.V2.share.character.enhanceskill;
+using AscNet.Table.V2.share.condition;
 using AscNet.Table.V2.share.fashion;
 using AscNet.Table.V2.share.partner;
+using AscNet.Table.V2.share.attrib;
 
 namespace AscNet.Common.Database
 {
@@ -504,11 +506,8 @@ namespace AscNet.Common.Database
                     changed = true;
                 }
 
-                if (character.EnhanceSkillList is null)
-                {
-                    character.EnhanceSkillList = new();
+                if (NormalizeEnhanceSkillsForCharacter(character))
                     changed = true;
-                }
 
                 if (skillRowsByCharacterId.TryGetValue((int)character.Id, out CharacterSkillTable? skillRow))
                 {
@@ -711,6 +710,11 @@ namespace AscNet.Common.Database
                     .LastOrDefault(skill => groupSkillIds.Contains(skill.Id));
                 if (selectedSkill is not null)
                 {
+                    // Clamp to the highest constructible level so skills over-leveled by an older
+                    // server cannot leave the character unconstructible on the client.
+                    int maxLevel = CharacterSkillMaxLevel((int)selectedSkill.Id);
+                    if (maxLevel > 0 && selectedSkill.Level > maxLevel)
+                        selectedSkill.Level = maxLevel;
                     normalizedSkills.Add(selectedSkill);
                     continue;
                 }
@@ -793,18 +797,102 @@ namespace AscNet.Common.Database
             return true;
         }
 
-        public static IReadOnlyList<uint> ResolveCharacterSkillIdsForGroupId(int skillGroupId)
+        /// <summary>
+        /// Enhance upgrade rows are keyed per skill and ordered by Id; the ordinal is the level
+        /// (level 0 = unlock, last row = terminal/max). Derived by ordering rather than a Level
+        /// column so it stays correct across the authoritative EnhanceSkillUpgrade projection.
+        /// </summary>
+        public static List<EnhanceSkillUpgradeTable> OrderedEnhanceSkillUpgrades(int skillId)
         {
-            if (skillGroupId <= 0)
-                return Array.Empty<uint>();
+            return TableReaderV2.Parse<EnhanceSkillUpgradeTable>()
+                .Where(row => row.SkillId == skillId)
+                .OrderBy(row => row.Id)
+                .ToList();
+        }
 
-            return TableReaderV2.Parse<CharacterSkillGroupTable>()
-                .Where(skillGroup => skillGroup.Id == skillGroupId)
-                .SelectMany(skillGroup => skillGroup.SkillId)
-                .Where(skillId => skillId > 0)
-                .Distinct()
-                .Select(skillId => (uint)skillId)
-                .ToArray();
+        public static int EnhanceSkillMaxLevel(int skillId)
+        {
+            int rowCount = OrderedEnhanceSkillUpgrades(skillId).Count;
+            return Math.Max(0, rowCount - 1);
+        }
+
+        /// <summary>
+        /// Leap/awaken skill lists hold exactly one active skill per owned enhance group. Prunes
+        /// foreign skills, clamps out-of-range levels, and de-duplicates to one entry per group.
+        /// Never grants locked groups (an absent group stays locked).
+        /// </summary>
+        private bool NormalizeEnhanceSkillsForCharacter(CharacterData character)
+        {
+            if (character.EnhanceSkillList is null)
+            {
+                character.EnhanceSkillList = new();
+                return true;
+            }
+
+            EnhanceSkillTable? enhanceRow = TableReaderV2.Parse<EnhanceSkillTable>()
+                .FirstOrDefault(row => row.CharacterId == (int)character.Id);
+            Dictionary<int, int> skillToGroupId = new();
+            Dictionary<int, List<int>> groupSkillsById = new();
+            if (enhanceRow is not null)
+            {
+                foreach (int groupId in enhanceRow.SkillGroupId.Where(id => id > 0).Distinct())
+                {
+                    EnhanceSkillGroupTable? group = TableReaderV2.Parse<EnhanceSkillGroupTable>()
+                        .FirstOrDefault(row => row.Id == groupId);
+                    if (group is null)
+                        continue;
+                    List<int> skills = group.SkillId.Where(id => id > 0).Distinct().ToList();
+                    if (skills.Count == 0)
+                        continue;
+                    groupSkillsById[groupId] = skills;
+                    foreach (int skillId in skills)
+                        skillToGroupId[skillId] = groupId;
+                }
+            }
+
+            if (skillToGroupId.Count == 0)
+            {
+                if (character.EnhanceSkillList.Count == 0)
+                    return false;
+                character.EnhanceSkillList.Clear();
+                return true;
+            }
+
+            bool changed = false;
+            List<CharacterSkill> kept = new();
+            foreach (CharacterSkill skill in character.EnhanceSkillList)
+            {
+                if (!skillToGroupId.ContainsKey((int)skill.Id))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                int maxLevel = EnhanceSkillMaxLevel((int)skill.Id);
+                if (skill.Level < 1 || skill.Level > maxLevel)
+                {
+                    skill.Level = Math.Clamp(skill.Level, 1, Math.Max(1, maxLevel));
+                    changed = true;
+                }
+                kept.Add(skill);
+            }
+
+            HashSet<int> seenGroups = new();
+            List<CharacterSkill> deduped = new();
+            foreach (CharacterSkill skill in kept)
+            {
+                if (!seenGroups.Add(skillToGroupId[(int)skill.Id]))
+                {
+                    changed = true;
+                    continue;
+                }
+                deduped.Add(skill);
+            }
+
+            if (deduped.Count != character.EnhanceSkillList.Count)
+                changed = true;
+            character.EnhanceSkillList = deduped;
+            return changed;
         }
 
         private static Character Create(long uid)
@@ -972,6 +1060,26 @@ namespace AscNet.Common.Database
             return character;
         }
 
+        public static IReadOnlyList<uint> ResolveCharacterSkillIdsForGroupId(int skillGroupId) =>
+            TableReaderV2.Parse<CharacterSkillGroupTable>()
+                .FirstOrDefault(group => group.Id == skillGroupId)?
+                .SkillId.Select(Convert.ToUInt32).ToArray() ?? [];
+
+        /// <summary>
+        /// Highest level with a CharacterSkillLevelEffect row, i.e. the highest level the client can
+        /// construct. The CharacterSkillUpgrade terminal row sometimes carries real costs instead of
+        /// being a costless marker, so upgrade-row costs alone over-state the ceiling for short-level
+        /// skills (QTE/signature/ultimate) and would let the server grant an unconstructible level.
+        /// </summary>
+        public static int CharacterSkillMaxLevel(int skillId)
+        {
+            return TableReaderV2.Parse<CharacterSkillLevelEffectTable>()
+                .Where(row => row.SkillId == skillId)
+                .Select(row => row.Level)
+                .DefaultIfEmpty()
+                .Max();
+        }
+
         public UpgradeCharacterSkillResult UpgradeCharacterSkillGroup(int skillGroupId, int count)
         {
             HashSet<uint> affectedCharacters = new();
@@ -979,29 +1087,53 @@ namespace AscNet.Common.Database
             int totalSkillPointCost = 0;
             int finalLevel = 0;
             IReadOnlyList<uint> affectedSkills = ResolveCharacterSkillIdsForGroupId(skillGroupId);
+            if (count <= 0 || affectedSkills.Count == 0)
+            {
+                // CharacterSkillGroupNotFound / invalid count. Never acknowledge an unrealizable upgrade.
+                throw new ServerCodeException("Invalid skill group or upgrade count!", 20009021);
+            }
 
             foreach (uint skillId in affectedSkills)
             {
+                int skillMaxLevel = CharacterSkillMaxLevel((int)skillId);
                 foreach (CharacterData character in Characters.Where(character => character.SkillList.Any(skill => skill.Id == skillId)))
                 {
                     CharacterSkill characterSkill = character.SkillList.First(skill => skill.Id == skillId);
                     int targetLevel = characterSkill.Level + count;
 
-                    while (characterSkill.Level < targetLevel)
+                    for (int level = characterSkill.Level; level < targetLevel; level++)
                     {
-                        var skillUpgrade = TableReaderV2.Parse<CharacterSkillUpgradeTable>().Find(x => x.SkillId == skillId && x.Level == characterSkill.Level);
-
-                        totalCoinCost += skillUpgrade?.UseCoin ?? 0;
-                        totalSkillPointCost += skillUpgrade?.UseSkillPoint ?? 0;
-
-                        characterSkill.Level++;
-                        finalLevel = characterSkill.Level;
+                        // Reject any transition into a level the client cannot construct; level 0 data
+                        // means the skill is not levelable at all.
+                        if (skillMaxLevel <= 0 || level >= skillMaxLevel)
+                        {
+                            // CharacterSkillMaxLevel
+                            throw new ServerCodeException("Skill already maxed!", 20009014);
+                        }
+                        CharacterSkillUpgradeTable? skillUpgrade = TableReaderV2.Parse<CharacterSkillUpgradeTable>().Find(x => x.SkillId == skillId && x.Level == level);
+                        // A missing or cost-less transition row marks the terminal (max) level.
+                        if (skillUpgrade is null
+                            || (skillUpgrade.UseCoin.GetValueOrDefault() == 0 && skillUpgrade.UseSkillPoint.GetValueOrDefault() == 0))
+                        {
+                            // CharacterSkillMaxLevel
+                            throw new ServerCodeException("Skill already maxed!", 20009014);
+                        }
+                        if (!MeetsCharacterSkillCondition(character, skillUpgrade.ConditionId))
+                        {
+                            // CharacterSkillConditionNotMet
+                            throw new ServerCodeException("Skill condition not met!", 20009021);
+                        }
+                        totalCoinCost += skillUpgrade.UseCoin ?? 0;
+                        totalSkillPointCost += skillUpgrade.UseSkillPoint ?? 0;
+                        finalLevel = level + 1;
                     }
-                    finalLevel = Math.Max(finalLevel, characterSkill.Level);
+                    finalLevel = Math.Max(finalLevel, targetLevel);
                     affectedCharacters.Add(character.Id);
                 }
             }
 
+            // No mutation here: the caller validates aggregate inventory against these costs first,
+            // then applies the level deltas so the transaction stays atomic.
             return new UpgradeCharacterSkillResult()
             {
                 AffectedCharacters = affectedCharacters.ToList(),
@@ -1009,6 +1141,47 @@ namespace AscNet.Common.Database
                 SkillPointCost = totalSkillPointCost,
                 Level = finalLevel
             };
+        }
+
+        public static bool MeetsCharacterSkillCondition(CharacterData character, IReadOnlyList<int>? conditionIds)
+        {
+            if (conditionIds is null || conditionIds.Count == 0)
+                return true;
+
+            foreach (int conditionId in conditionIds)
+            {
+                if (conditionId <= 0)
+                    continue;
+                ConditionTable? condition = TableReaderV2.Parse<ConditionTable>()
+                    .FirstOrDefault(candidate => candidate.Id == conditionId);
+                if (condition is null || condition.Params.Count == 0)
+                    return false;
+                if (condition.Type == 13103)
+                {
+                    // Character level >= Params[0].
+                    if (character.Level < condition.Params[0])
+                        return false;
+                }
+                else if (condition.Type == 13105)
+                {
+                    // Character quality >= Params[0]; when Params[2] (star) is set, require star >= it
+                    // at the exact quality tier (mirrors client Condition 13105).
+                    int requiredQuality = condition.Params[0];
+                    int requiredStar = condition.Params.Count > 2 ? condition.Params[2] : 0;
+                    bool meetsQuality = requiredStar > 0
+                        ? character.Quality > requiredQuality
+                            || (character.Quality == requiredQuality && character.Star >= requiredStar)
+                        : character.Quality >= requiredQuality;
+                    if (!meetsQuality)
+                        return false;
+                }
+                else
+                {
+                    // Unknown condition type: treat as closed rather than granting progression.
+                    return false;
+                }
+            }
+            return true;
         }
 
         public EquipData? AddEquip(uint equipId, int characterId = 0, int level = 1)

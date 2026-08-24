@@ -1,6 +1,8 @@
-﻿using AscNet.Common.Database;
+using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
+using AscNet.GameServer.Game;
+using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.signin;
 using MessagePack;
 
@@ -8,88 +10,188 @@ namespace AscNet.GameServer.Handlers
 {
     internal class SignInModule
     {
-        private static readonly Lazy<SignInTable> DailySignIn = new(() => TableReaderV2.Parse<SignInTable>()
-            .Single(row => row.Type == 1));
-        private static readonly Lazy<Dictionary<int, SignInRewardTable>> DailyRewardsByDay = new(() => TableReaderV2.Parse<SignInRewardTable>()
-            .Where(row => row.SignId == DailySignIn.Value.Id)
-            .ToDictionary(row => row.Day, row => row));
+        // ponytail: cold-loaded once at first use; O(n) per-sign lookups are fine at
+        // sign-in table scale. Promote to dictionaries keyed per round/day if it grows.
+        private static readonly Lazy<IReadOnlyDictionary<int, SignInTable>> SignsById = new(() =>
+            TableReaderV2.Parse<SignInTable>().ToDictionary(row => row.Id, row => row));
+        private static readonly Lazy<IReadOnlyDictionary<(int SignId, int Round, int Day), SignInRewardTable>> RewardsBySignRoundDay = new(() =>
+            TableReaderV2.Parse<SignInRewardTable>()
+                .ToDictionary(row => (row.SignId, row.Round, row.Day), row => row));
+
+        /// <summary>Generic sign-in rejections carry a non-zero code; the exact retail codes are unobserved.</summary>
+        private const int SignInErrorCode = 1;
+        private const int BusinessDayOffsetSeconds = 5 * 3600; // daily claim boundary is 05:00 UTC
 
 
         [RequestPacketHandler("SignInRequest")]
         public static void SignInRequestHandler(Session session, Packet.Request packet)
         {
             SignInRequest request = MessagePackSerializer.Deserialize<SignInRequest>(packet.Content);
-            SignInResponse signInResponse = new();
+            SignInResponse response = ProcessSignInRequest(session, request.Id, DateTimeOffset.UtcNow);
+            session.SendResponse(response, packet.Id);
+        }
 
-            if (request.Id == DailySignIn.Value.Id && !HasSignedInToday(session.player))
-            {
-                SignInRewardTable? reward = GetCurrentSignInReward(session.player);
-                List<RewardGoods> rewardGoods = reward is null
-                    ? []
-                    : RewardHandler.GiveRewards(RewardHandler.GetRewardGoods(reward.RewardId), session);
-                if (rewardGoods.Count > 0)
-                {
-                    signInResponse.RewardGoodsList.AddRange(rewardGoods);
-                    session.player.SignInClaimCount = Math.Max(session.player.SignInClaimCount, 0) + 1;
-                    session.player.LastSignInTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                    session.inventory.Save();
-                    session.character.Save();
-                    session.player.Save();
-                }
-                else
-                {
-                    session.log.Error($"No reward is configured for daily sign-in day {GetCurrentSignInDay(session.player, signedToday: false)}.");
-                }
-            }
+        /// <summary>Table-driven generic claim for both Type 1 daily and Type 2 scheduled event sign-ins.</summary>
+        internal static SignInResponse ProcessSignInRequest(Session session, int signId, DateTimeOffset now)
+        {
+            SignInResponse response = new();
+            if (!SignsById.Value.TryGetValue(signId, out SignInTable? sign))
+                return Reject(response);
 
-            session.SendResponse(signInResponse, packet.Id);
+            if (!IsSignInOpen(sign, session.player, now))
+                return Reject(response);
+
+            // Same-day duplicate: idempotent no-op (no reward, no state mutation), matching retail.
+            if (HasSignedToday(session.player, signId, now))
+                return response;
+
+            if (IsSignInComplete(sign, session.player, signId))
+                return Reject(response);
+
+            if (!TryGetCurrentReward(sign, session.player, signId, out SignInRewardTable? reward)
+                || reward is null)
+                return Reject(response);
+
+            List<RewardGoodsTable> goods = RewardHandler.GetRewardGoods(reward.RewardId);
+            if (goods.Count == 0)
+                return Reject(response);
+
+            GetSignProgress(sign, session.player, signId, got: false, out int round, out int day);
+            string claimKey = $"signin:{signId}:{round}:{day}";
+            bool alreadyGranted = ClaimKeyAlreadyApplied(session, claimKey);
+            RewardApplicationResult result = RewardHandler.ApplyRewardsOnceAndPersist(
+                [new RewardGrant(claimKey, goods)], session);
+            result.SendPushes(session);
+
+            PlayerSignInState state = GetOrCreateSignInState(session.player, signId);
+            if (!alreadyGranted)
+                state.ClaimCount++;
+            state.LastSignInTime = now.ToUnixTimeSeconds();
+            session.player.Save();
+
+            response.RewardGoodsList.AddRange(result.RewardGoods);
+            return response;
         }
 
         internal static List<SignInfo> BuildLoginSignInfos(Player player)
+            => BuildLoginSignInfos(player, DateTimeOffset.UtcNow);
+
+        internal static List<SignInfo> BuildLoginSignInfos(Player player, DateTimeOffset now)
         {
-            bool signedToday = HasSignedInToday(player);
-            return
-            [
-                new()
+            List<SignInfo> infos = [];
+            foreach (SignInTable sign in SignsById.Value.Values.OrderBy(sign => sign.Id))
+            {
+                if (!IsSignInOpen(sign, player, now))
+                    continue;
+
+                bool got = HasSignedToday(player, sign.Id, now);
+                GetSignProgress(sign, player, sign.Id, got, out int round, out int day);
+                infos.Add(new SignInfo
                 {
-                    Id = DailySignIn.Value.Id,
-                    Round = GetCurrentSignInRound(player, signedToday),
-                    Day = GetCurrentSignInDay(player, signedToday),
-                    Got = signedToday,
+                    Id = sign.Id,
+                    Round = round,
+                    Day = day,
+                    Got = got,
                     FinishDay = 0
-                },
-            ];
+                });
+            }
+            return infos;
         }
 
-        internal static bool HasSignedInToday(Player player)
+        /// <summary>Full <see cref="NotifySignInData"/> replacement for a 05:00 transition/login reconciliation.</summary>
+        public static NotifySignInData BuildNotifySignInData(Player player, DateTimeOffset now)
+            => new() { SignInfos = BuildLoginSignInfos(player, now) };
+
+        /// <summary>Sends the full sign-in replacement push; callers drive the reconciliation, not a timer.</summary>
+        public static void SendSignInResetPush(Session session, DateTimeOffset now)
+            => session.SendPush(BuildNotifySignInData(session.player, now));
+
+        private static SignInResponse Reject(SignInResponse response)
         {
-            if (player.LastSignInTime <= 0)
+            response.Code = SignInErrorCode;
+            return response;
+        }
+
+        /// <summary>Type 1 daily is always open; Type 2 events require an open schedule window and level gate.</summary>
+        private static bool IsSignInOpen(SignInTable sign, Player player, DateTimeOffset now)
+        {
+            if (sign.Type == 1)
+                return true;
+            if (sign.TimeId is not int timeId || timeId <= 0 || !ActivityScheduleService.IsOpen(timeId, now))
                 return false;
-
-            DateTime lastSignInDate = DateTimeOffset.FromUnixTimeSeconds(player.LastSignInTime).UtcDateTime.Date;
-            return lastSignInDate == DateTimeOffset.UtcNow.UtcDateTime.Date;
+            return sign.OpenLevel is not int requiredLevel || player.PlayerData.Level >= requiredLevel;
         }
 
-        private static SignInRewardTable? GetCurrentSignInReward(Player player)
+        /// <summary>Type 2 events complete after every configured day is claimed; the daily log-in recurs.</summary>
+        private static bool IsSignInComplete(SignInTable sign, Player player, int signId)
         {
-            DailyRewardsByDay.Value.TryGetValue((int)GetCurrentSignInDay(player, signedToday: false), out SignInRewardTable? reward);
-            return reward;
+            if (sign.Type != 2)
+                return false;
+            return GetOrCreateSignInState(player, signId).ClaimCount >= TotalDays(sign);
         }
 
-        private static long GetCurrentSignInRound(Player player, bool signedToday)
+        private static int TotalDays(SignInTable sign)
+            => sign.RoundDays.Count > 0 ? sign.RoundDays.Sum() : 1;
+        /// <summary>Wire Round/Day. Events never roll past their last day; Got=false surfaces the next claimable day.</summary>
+        private static void GetSignProgress(SignInTable sign, Player player, int signId, bool got, out int round, out int day)
         {
-            return GetDisplayedSignInClaimCount(player, signedToday) / DailySignIn.Value.RoundDays + 1;
+            long claims = GetOrCreateSignInState(player, signId).ClaimCount;
+            int roundDays = TotalDays(sign);
+            if (sign.Type == 2)
+            {
+                round = 1;
+                day = (int)Math.Min(got ? claims : claims + 1, roundDays);
+            }
+            else
+            {
+                long displayed = got && claims > 0 ? claims - 1 : claims;
+                round = (int)(displayed / roundDays) + 1;
+                day = (int)(displayed % roundDays) + 1;
+            }
         }
 
-        private static long GetCurrentSignInDay(Player player, bool signedToday)
+        private static bool TryGetCurrentReward(
+            SignInTable sign,
+            Player player,
+            int signId,
+            out SignInRewardTable? reward)
         {
-            return GetDisplayedSignInClaimCount(player, signedToday) % DailySignIn.Value.RoundDays + 1;
+            GetSignProgress(sign, player, signId, got: false, out int round, out int day);
+            return RewardsBySignRoundDay.Value.TryGetValue((signId, round, day), out reward);
         }
 
-        private static long GetDisplayedSignInClaimCount(Player player, bool signedToday)
+        private static bool HasSignedToday(Player player, int signId, DateTimeOffset now)
         {
-            long completedClaims = Math.Max(player.SignInClaimCount, 0);
-            return signedToday && completedClaims > 0 ? completedClaims - 1 : completedClaims;
+            long lastSignInTime = GetOrCreateSignInState(player, signId).LastSignInTime;
+            return lastSignInTime > 0
+                && (lastSignInTime - BusinessDayOffsetSeconds) / 86_400
+                    == (now.ToUnixTimeSeconds() - BusinessDayOffsetSeconds) / 86_400;
+        }
+
+        private static PlayerSignInState GetOrCreateSignInState(Player player, int signId)
+        {
+            player.SignInStates ??= [];
+            PlayerSignInState? state = player.SignInStates.FirstOrDefault(candidate => candidate.Id == signId);
+            if (state is not null)
+                return state;
+
+            state = new PlayerSignInState { Id = signId };
+            player.SignInStates.Add(state);
+
+            // Normalize the legacy global daily counters into the Id 1 state exactly once;
+            // from here on per-sign state is the only write path (no dual-write aliases).
+            if (signId == 1 && (player.SignInClaimCount > 0 || player.LastSignInTime > 0))
+            {
+                state.ClaimCount = Math.Max(player.SignInClaimCount, 0);
+                state.LastSignInTime = player.LastSignInTime;
+            }
+            return state;
+        }
+
+        private static bool ClaimKeyAlreadyApplied(Session session, string claimKey)
+        {
+            return session.inventory.AppliedRewardClaims.Contains(claimKey, StringComparer.Ordinal)
+                || session.character.AppliedRewardClaims.Contains(claimKey, StringComparer.Ordinal);
         }
     }
 }

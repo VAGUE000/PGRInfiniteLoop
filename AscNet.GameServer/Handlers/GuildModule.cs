@@ -1,4 +1,4 @@
-﻿using AscNet.Common.MsgPack;
+using AscNet.Common.MsgPack;
 using MessagePack;
 using Newtonsoft.Json;
 
@@ -20,12 +20,25 @@ namespace AscNet.GameServer.Handlers
         public List<object> Datas = [];
         public long JoinCdEnd;
     }
+
+    [MessagePackObject(true)]
+    public class GuildWarPopupActionRequest
+    {
+        public List<int> ActionPlayed;
+    }
+
+    [MessagePackObject(true)]
+    public class GuildWarPopupActionResponse
+    {
+        public int Code;
+    }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
 
     internal class GuildModule
     {
         private const uint DefaultGuildId = 365;
+        private const int GuildWarActionSaveFailed = 1;
 
         // Guild recommendation data is unavailable until guild persistence exists.
         [RequestPacketHandler("GuildListRecommendRequest")]
@@ -121,6 +134,39 @@ namespace AscNet.GameServer.Handlers
                     LastRecvTime = (int)DateTimeOffset.Now.ToUnixTimeSeconds()
                 }
             }, packet.Id);
+        }
+
+        [RequestPacketHandler("GuildWarPopupActionRequest")]
+        public static void GuildWarPopupActionRequestHandler(Session session, Packet.Request packet)
+        {
+            GuildWarPopupActionRequest request = MessagePackSerializer.Deserialize<GuildWarPopupActionRequest>(packet.Content);
+            List<int> played = session.player.GuildWar.PlayedActionIds;
+            List<int> added = [];
+            foreach (int actionId in request.ActionPlayed ?? [])
+            {
+                if (actionId > 0 && !played.Contains(actionId))
+                {
+                    played.Add(actionId);
+                    added.Add(actionId);
+                }
+            }
+
+            if (added.Count > 0)
+            {
+                try
+                {
+                    session.player.SaveChecked();
+                }
+                catch
+                {
+                    foreach (int actionId in added)
+                        played.Remove(actionId);
+                    session.SendResponse(new GuildWarPopupActionResponse { Code = GuildWarActionSaveFailed }, packet.Id);
+                    return;
+                }
+            }
+
+            session.SendResponse(new GuildWarPopupActionResponse { Code = 0 }, packet.Id);
         }
 
         private static uint ResolveGuildId(int guildId)

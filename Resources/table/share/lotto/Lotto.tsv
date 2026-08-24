@@ -23,3 +23,7 @@ Id	LottoGroupId	Priority	Banner	ReachRewardTimes	ExtraRewardId	ConsumeId	BuyTick
 100001	100001	2	Assets/Product/Ui/ComponentPrefab/DrawCoating/EnDrawCoating01.prefab	1	1211	260001	1										50												2160016	
 110001	110001	1	Assets/Product/Ui/ComponentPrefab/DrawCoating/DrawCoating02.prefab	8	1211	400066	110001	110002	110003	110004	110005	110006	110007	110008	110009	110010	50	100	250	400	600	800	1200	1700	2200	2700			2160134	
 22	22	22	Assets/Product/Ui/ComponentPrefab/DrawCollaboration/DrawExtra02.prefab	8	67146	50157	181	182	183	184	185	186	187	188	189	190	50	100	250	400	600	800	1200	1700	2200	2700	54	UiLottoCibeizhe		2
+2001	2001	17	Assets/Product/Ui/ComponentPrefab/DrawCollaboration/DrawExtra02.prefab	8	1363	50171	151	152	153	154	155	156	157	158	159	160	50	100	250	400	600	800	1200	1700	2200	2700	65	UiLottoLuna	49501	
+2002	2002	18	Assets/Product/Ui/ComponentPrefab/DrawCollaboration/DrawExtra02.prefab	8	1309	50172	91	92	93	94	95	96	97	98	99	100	50	100	250	400	600	800	1200	1700	2200	2700		UiLottoVera	49501	
+2003	2003	19	Assets/Product/Ui/ComponentPrefab/DrawCollaboration/DrawExtra02.prefab	8	1288	50173	121	122	123	124	125	126	127	128	129	130	50	100	250	400	600	800	1200	1700	2200	2700	66	UiLottoKarenina	49501	
+2004	2004	22	Assets/Product/Ui/ComponentPrefab/DrawCollaboration/DrawExtra02.prefab	8	67146	50174	181	182	183	184	185	186	187	188	189	190	50	100	250	400	600	800	1200	1700	2200	2700	67	UiLottoCibeizhe	49501	2

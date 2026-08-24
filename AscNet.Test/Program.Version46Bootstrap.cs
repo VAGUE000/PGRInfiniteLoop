@@ -243,8 +243,14 @@ internal partial class Program
         AssertEqual(live.IndexSha1, ConfigValue(served, "IndexSha1"), "4.6 served IndexSha1");
         AssertEqual(live.LaunchIndexSha1, ConfigValue(served, "LaunchIndexSha1"), "4.6 served LaunchIndexSha1");
 
+        ServerVersionConfig current = (ServerVersionConfig)getVersion.Invoke(null, ["4.7.0"])!;
+        AssertEqual("4.7.10", current.DocumentVersion, "4.7 live DocumentVersion");
+        AssertEqual("4.7.10", current.LaunchModuleVersion, "4.7 live LaunchModuleVersion");
+        AssertEqual("c5d4baac85a6e37b8109ea43dc045d31", current.IndexMd5, "4.7 live IndexMd5");
+        AssertEqual("499c7730eb82ccfa6084c4f1d97d3046495dfb47", current.IndexSha1, "4.7 live IndexSha1");
+        AssertEqual("e2653fd80f26cb8823ec0757a979da1b4bc468e6", current.LaunchIndexSha1, "4.7 live LaunchIndexSha1");
         ServerVersionConfig fallback = (ServerVersionConfig)getVersion.Invoke(null, ["99.0.0"])!;
-        AssertEqual(live.IndexSha1, fallback.IndexSha1, "unknown future version uses latest live metadata");
+        AssertEqual(current.IndexSha1, fallback.IndexSha1, "unknown future version uses latest live metadata");
         ServerVersionConfig previous = (ServerVersionConfig)getVersion.Invoke(null, ["4.5.0"])!;
         if (previous.IndexSha1 == live.IndexSha1)
             throw new InvalidDataException("4.6 configuration metadata did not remain distinct from 4.5.");

@@ -68,5 +68,12 @@
     "IndexMd5": "c5d4baac85a6e37b8109ea43dc045d31",
     "IndexSha1": "f84967640f63e7d1010e459e70e44d5b0610602e",
     "LaunchIndexSha1": "e7d4d4d44b26dbadd4d752111686216451706717"
+  },
+  "4.7.0": {
+    "DocumentVersion": "4.7.10",
+    "LaunchModuleVersion": "4.7.10",
+    "IndexMd5": "c5d4baac85a6e37b8109ea43dc045d31",
+    "IndexSha1": "499c7730eb82ccfa6084c4f1d97d3046495dfb47",
+    "LaunchIndexSha1": "e2653fd80f26cb8823ec0757a979da1b4bc468e6"
   }
 }

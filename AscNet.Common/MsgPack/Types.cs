@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 using MessagePack;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.Options;
@@ -370,6 +370,8 @@ namespace AscNet.Common.MsgPack
         public long Id { get; set; }
         public long StartTime { get; set; }
         public long EndTime { get; set; }
+        public string? StartTimeStr { get; set; }
+        public string? EndTimeStr { get; set; }
     }
 
     [global::MessagePack.MessagePackObject(true)]
@@ -590,8 +592,8 @@ namespace AscNet.Common.MsgPack
         public List<DlcCharacter> DlcCharacterList { get; set; } = new();
         public List<dynamic> DlcChipList { get; set; } = new();
         public dynamic? WorldInfo { get; set; }
-        public dynamic? KeyPadSetting { get; set; }
         public RedPointRecords RedPointRecords { get; set; } = new();
+        public AudioPlayerLoginData AudioPlayerLoginData { get; set; } = new();
     }
 
 
@@ -1240,6 +1242,85 @@ namespace AscNet.Common.MsgPack
     }
 
     [MessagePack.MessagePackObject(true)]
+    public class SignInResponse
+    {
+        public int Code { get; set; }
+        public List<RewardGoods> RewardGoodsList { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class AudioPlayerLoginData
+    {
+        public List<int> FavoriteSongs { get; set; } = new();
+        public List<int> BackgroundSongs { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class AddAudioPlayerFavoriteSongRequest
+    {
+        public int SongId { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class AddAudioPlayerFavoriteSongResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class RemoveAudioPlayerFavoriteSongRequest
+    {
+        public int SongId { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class RemoveAudioPlayerFavoriteSongResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class AddAudioPlayerBackgroundSongRequest
+    {
+        public List<int> SongIds { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class AddAudioPlayerBackgroundSongResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class RemoveAudioPlayerBackgroundSongRequest
+    {
+        public int SongId { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class RemoveAudioPlayerBackgroundSongResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ResetAudioPlayerBackgroundSongRequest
+    {
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ResetAudioPlayerBackgroundSongResponse
+    {
+        public int Code { get; set; }
+        public List<int> BackgroundSongs { get; set; } = new();
+    }
+    [MessagePack.MessagePackObject(true)]
+    public class NotifySignInData
+    {
+        public List<SignInfo> SignInfos { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
     public class GuideOpenRequest
     {
         public int GuideGroupId { get; set; }
@@ -1249,13 +1330,6 @@ namespace AscNet.Common.MsgPack
     public class GuideOpenResponse
     {
         public int Code { get; set; }
-    }
-
-    [MessagePack.MessagePackObject(true)]
-    public class SignInResponse
-    {
-        public int Code { get; set; }
-        public List<RewardGoods> RewardGoodsList { get; set; } = new();
     }
 
     [MessagePack.MessagePackObject(true)]
@@ -1310,6 +1384,13 @@ namespace AscNet.Common.MsgPack
     public class NotifyBackgroundLoginData
     {
         public List<UInt32> HaveBackgroundIds { get; set; } = new();
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class NotifyAddBackground
+    {
+        public Int32 BackgroundId { get; set; }
     }
 
 
@@ -1453,6 +1534,17 @@ namespace AscNet.Common.MsgPack
 
 
     [global::MessagePack.MessagePackObject(true)]
+    public class FinishBriefStoryRequest
+    {
+        public int Id { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class FinishBriefStoryResponse
+    {
+        public int Code { get; set; }
+    }
     public class NotifyChessPursuitGroupInfo
     {
         public List<dynamic> MapDBList { get; set; } = new();
@@ -3676,11 +3768,168 @@ namespace AscNet.Common.MsgPack
     }
 
 
+    // ---- 4.7 Envelope / PBR / Concert Pre-Heating event wire contracts ----
+    // Key order mirrors the retail 4.7 captures (envelope/EnvelopeActivity, pbr, concertpreheating).
     [MessagePack.MessagePackObject(true)]
-    public class NotifyMaintainerActionDailyReset
+    public class NotifyEnvelope
     {
-        public int UsedActionCount { get; set; }
-        public int ExtraActionCount { get; set; }
+        public int ActivityId { get; set; }
+        public bool HasReward { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class EnvelopeEnterRequest
+    {
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class EnvelopeEnterResponse
+    {
+        public int Code { get; set; }
+        public List<RewardGoods> RewardGoodsList { get; set; } = new();
+        public List<RewardGoods> TaskRewardGoodsList { get; set; } = new();
+        public List<int> OpenedCharacterIds { get; set; } = new();
+        public Dictionary<int, int> InstrumentBindings { get; set; } = new();
+        public List<int> AvgWatchedCharacterIds { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrActivityDataNotify
+    {
+        public PbrDataDb PbrDataDb { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrDataDb
+    {
+        public int ActivityId { get; set; }
+        public PbrSegmentSettleData? SegmentSettleData { get; set; }
+        public PbrMetaProgression MetaProgression { get; set; } = new();
+        public Dictionary<int, PbrStageRecord> StageRecords { get; set; } = new();
+        public PbrCompendiums Compendiums { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrMetaProgression
+    {
+        public List<int> UnlockNodes { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrStageRecord
+    {
+        public int StageId { get; set; }
+        public int HistoryMaxWave { get; set; }
+        public bool IsPass { get; set; }
+        public bool IsPassWave { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrCompendiums
+    {
+        public Dictionary<int, PbrItem> CompendiumItems { get; set; } = new();
+        public Dictionary<int, PbrMonster> CompendiumMonsters { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrItem
+    {
+        public int ItemId { get; set; }
+        public long UnlockTime { get; set; }
+        public int GainNum { get; set; }
+        public int TriggerNum { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrMonster
+    {
+        public int MonsterId { get; set; }
+        public long DamageTotal { get; set; }
+        public int BeKillNum { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrAdventureShopData
+    {
+        public int ShopId { get; set; }
+        public int MaxChooseCount { get; set; }
+        public int MaxFreshCount { get; set; }
+        public int UseChooseCount { get; set; }
+        public int UseFreshCount { get; set; }
+        public List<int> SellItems { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrSegmentSettleData
+    {
+        public int State { get; set; }
+        public int StageId { get; set; }
+        public PbrAdventureShopData? ShopData { get; set; }
+        public int Wave { get; set; }
+        public int CharacterId { get; set; }
+        public int CharacterLevel { get; set; }
+        public int CharacterExp { get; set; }
+        public Dictionary<int, int> BaseAttrs { get; set; } = new();
+        public Dictionary<int, int> CurAttrs { get; set; } = new();
+        public Dictionary<int, int> MaxAttrs { get; set; } = new();
+        public Dictionary<int, PbrItem> Items { get; set; } = new();
+        public Dictionary<int, PbrMonster> WaveMonsters { get; set; } = new();
+        public Dictionary<int, PbrItem> WaveObrs { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class PbrCompendiumPush
+    {
+        public List<PbrItem> AddCompendiumItems { get; set; } = new();
+        public List<PbrItem> UpdateCompendiumItems { get; set; } = new();
+        public List<PbrMonster> AddCompendiumMonsters { get; set; } = new();
+        public List<PbrMonster> UpdateCompendiumMonsters { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class NotifyConcertPreHeating
+    {
+        public ConcertPreHeatingDataDb ConcertPreHeatingDataDb { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ConcertPreHeatingDataDb
+    {
+        public int ActivityId { get; set; }
+        public List<ConcertPreHeatingStageFinish> StageFinish { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ConcertPreHeatingStageFinish
+    {
+        public int StageId { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ConcertPreHeatingStartRequest
+    {
+        public int StageId { get; set; }
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ConcertPreHeatingStartResponse
+    {
+        public int Code { get; set; }
+    }
+    [MessagePack.MessagePackObject(true)]
+    public class NotifyConcertVideoConfig
+    {
+        public Dictionary<int, ConcertVideoConfigEntry> ConcertVideoConfigs { get; set; } = new();
+    }
+
+    [MessagePack.MessagePackObject(true)]
+    public class ConcertVideoConfigEntry
+    {
+        public int Id { get; set; }
+        public string LiveUrl { get; set; } = string.Empty;
+        public int LiveTimeId { get; set; }
+        public string RecordUrl { get; set; } = string.Empty;
+        public int RecordTimeId { get; set; }
     }
 
 }

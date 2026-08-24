@@ -25,6 +25,6 @@ Id	Name	Difficulty	FightEventIds[1]	StageId	BossId	UnlockConditionId	IsPractice
 24	Hell	4	4658	30163262	6	862888	
 25	Enora Lueya Tutorial	1	4658	30163263	6		1
 26	NORMAL	1	4670	30163264	7		
-27	HARD	3	4670	30163265	7	862893	
+27	Hard	3	4670	30163265	7	862893	
 28	Hell	4	4670	30163266	7	862894	
 29	Ezette Tutorial	1	4670	30163267	7		1

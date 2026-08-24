@@ -1,8 +1,9 @@
-﻿using AscNet.Common.MsgPack;
+using AscNet.Common.MsgPack;
 using AscNet.Common.Database;
 using AscNet.Common.Util;
 using AscNet.Table.V2.client.functional;
 using AscNet.Table.V2.share.functional;
+using AscNet.Table.V2.share.headportrait;
 using MessagePack;
 
 namespace AscNet.GameServer.Handlers
@@ -103,13 +104,19 @@ namespace AscNet.GameServer.Handlers
     {
         public long Id { get; set; }
     }
-
     [MessagePackObject(true)]
     public class SetHeadFrameResponse
     {
         public int Code { get; set; }
     }
 
+    [MessagePackObject(true)]
+    public class NotifyHeadTimeout
+    {
+        public long CurrHeadPortraitId { get; set; }
+        public long CurrHeadFrameId { get; set; }
+        public List<long> TimeoutIds { get; set; } = new();
+    }
     [MessagePackObject(true)]
     public class SetCurrentMedalRequest
     {
@@ -385,8 +392,18 @@ namespace AscNet.GameServer.Handlers
         public static void SetHeadPortraitRequestHandler(Session session, Packet.Request packet)
         {
             SetHeadPortraitRequest request = MessagePackSerializer.Deserialize<SetHeadPortraitRequest>(packet.Content);
-            session.player.PlayerData.CurrHeadPortraitId = request.Id;
-            session.player.Save();
+            const int invalidRequestCode = 20012001;
+            if (!CanEquipHead(session, request.Id, type: 1, DateTimeOffset.Now.ToUnixTimeSeconds()))
+            {
+                session.SendResponse(new SetHeadPortraitResponse { Code = invalidRequestCode }, packet.Id);
+                return;
+            }
+
+            if (session.player.PlayerData.CurrHeadPortraitId != request.Id)
+            {
+                session.player.PlayerData.CurrHeadPortraitId = request.Id;
+                session.player.Save();
+            }
             session.SendResponse(new SetHeadPortraitResponse(), packet.Id);
         }
 
@@ -394,9 +411,113 @@ namespace AscNet.GameServer.Handlers
         public static void SetHeadFrameRequestHandler(Session session, Packet.Request packet)
         {
             SetHeadFrameRequest request = MessagePackSerializer.Deserialize<SetHeadFrameRequest>(packet.Content);
-            session.player.PlayerData.CurrHeadFrameId = request.Id;
-            session.player.Save();
+            const int invalidRequestCode = 20012001;
+            if (!CanEquipHead(session, request.Id, type: 2, DateTimeOffset.Now.ToUnixTimeSeconds()))
+            {
+                session.SendResponse(new SetHeadFrameResponse { Code = invalidRequestCode }, packet.Id);
+                return;
+            }
+
+            if (session.player.PlayerData.CurrHeadFrameId != request.Id)
+            {
+                session.player.PlayerData.CurrHeadFrameId = request.Id;
+                session.player.Save();
+            }
             session.SendResponse(new SetHeadFrameResponse(), packet.Id);
+        }
+
+        /// <summary>
+        /// A client may equip an owned, table-typed, currently-valid portrait/frame only.
+        /// </summary>
+        private static bool CanEquipHead(Session session, long id, int type, long nowUnixSeconds)
+        {
+            if (id <= 0)
+                return false;
+
+            HeadPortraitTable? row = TableReaderV2.Parse<HeadPortraitTable>().Find(candidate => candidate.Id == id);
+            if (row is null || row.Type != type)
+                return false;
+
+            HeadPortraitList? owned = session.player.HeadPortraits.Find(candidate => candidate.Id == id);
+            return owned is not null && IsHeadEntryValid(row, owned, nowUnixSeconds);
+        }
+
+        /// <summary>
+        /// Mirror of XHeadPortraitManager.IsHeadPortraitValid (Forever=0, Duration=1, FixedTime=2).
+        /// AscNet's HeadPortrait table has no FixedTime TimeId window, so FixedTime entries resolve as not-valid.
+        /// </summary>
+        public static bool IsHeadEntryValid(HeadPortraitTable row, HeadPortraitList owned, long nowUnixSeconds)
+        {
+            if (row is null || owned is null)
+                return false;
+
+            return (row.LimitType ?? 0) switch
+            {
+                0 => true, // Forever
+                1 => nowUnixSeconds - owned.BeginTime < (long)owned.LeftCount * row.Duration.GetValueOrDefault(), // Duration, repeatable via LeftCount
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Login reconciliation hook for AccountModule. Mutates and persists: keeps expired owned
+        /// entries in HeadPortraits (matching the retail NotifyLogin oracle) and repairs any expired
+        /// equipped portrait/frame to a valid owned non-expired same-type default (or 0 if none).
+        /// Returns the exact NotifyHeadTimeout state to push AFTER NotifyLogin; null when nothing is expired.
+        /// </summary>
+        public static NotifyHeadTimeout? ReconcileHeadTimeouts(Session session, DateTimeOffset now)
+        {
+            long nowUnixSeconds = now.ToUnixTimeSeconds();
+            List<HeadPortraitTable> rows = TableReaderV2.Parse<HeadPortraitTable>();
+            List<long> timeoutIds = session.player.HeadPortraits
+                .Where(owned => rows.FirstOrDefault(row => row.Id == owned.Id) is { } row
+                    && !IsHeadEntryValid(row, owned, nowUnixSeconds))
+                .Select(owned => owned.Id)
+                .ToList();
+
+            bool changed = false;
+            long portraitId = RepairEquippedHeadId(session, rows, type: 1, session.player.PlayerData.CurrHeadPortraitId, nowUnixSeconds, ref changed);
+            long frameId = RepairEquippedHeadId(session, rows, type: 2, session.player.PlayerData.CurrHeadFrameId, nowUnixSeconds, ref changed);
+
+            if (changed)
+                session.player.Save();
+
+            if (timeoutIds.Count == 0)
+                return null;
+
+            return new NotifyHeadTimeout
+            {
+                CurrHeadPortraitId = portraitId,
+                CurrHeadFrameId = frameId,
+                TimeoutIds = timeoutIds
+            };
+        }
+
+        private static long RepairEquippedHeadId(Session session, List<HeadPortraitTable> rows, int type, long currentId, long nowUnixSeconds, ref bool changed)
+        {
+            if (currentId > 0
+                && rows.FirstOrDefault(row => row.Id == currentId && row.Type == type) is { } currentRow
+                && session.player.HeadPortraits.FirstOrDefault(owned => owned.Id == currentId) is { } currentOwned
+                && IsHeadEntryValid(currentRow, currentOwned, nowUnixSeconds))
+            {
+                return currentId;
+            }
+
+            long repairedId = session.player.HeadPortraits
+                .Where(owned => rows.FirstOrDefault(row => row.Id == owned.Id && row.Type == type) is { } row
+                    && IsHeadEntryValid(row, owned, nowUnixSeconds))
+                .OrderByDescending(owned => rows.First(row => row.Id == owned.Id).Priority)
+                .Select(owned => owned.Id)
+                .FirstOrDefault();
+            if (repairedId != currentId)
+            {
+                if (type == 1)
+                    session.player.PlayerData.CurrHeadPortraitId = repairedId;
+                else
+                    session.player.PlayerData.CurrHeadFrameId = repairedId;
+                changed = true;
+            }
+            return repairedId;
         }
 
         [RequestPacketHandler("SetCurrentMedalRequest")]

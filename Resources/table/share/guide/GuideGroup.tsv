@@ -10,9 +10,9 @@ Id	Priority	Ignore	Desc	GuideType	ConditionId[1]	ConditionId[2]	ConditionId[3]	C
 50201	50201	0	Complete 1-3 Guide: Deploy Liv	1	70102				50201	UiFubenMainLineChapter	FuBenNor01(Clone)	0	50201
 50202	50202	1	(Abandoned) Guide to upgrade Liv	1	200000				50202	UiMain		0	50201
 50203	50203	0	Complete 1-4 Guide: Lucia Upgrade (Originally Lucia Skill Upgrade)	1	70102	863074			50203	UiBattleRoleRoom		0	50201
-50301	50301	0	Complete 1-4 Guide: Member Evolution	1	70103				50301	UiMain		0	50301
+50301	50301	0	Complete 1-4 Guide: Lucia Upgrade (Originally Lucia Skill Upgrade)	1	70103				50301	UiMain		0	50301
 50610	50610	0	Complete 1-4 Guide: Thunderbolt Manual	1	84100111	863057			50610	UiMain		0	50610
-50611	50611	0	Complete 1-6 Guide: Beginner Target	1	70103	863057			50611	UiMain	GridBtnActivity13	0	50611
+50611	50611	0	Complete 1-4 Guide: Thunderbolt Manual	1	70103	863057			50611	UiMain	GridBtnActivity13	0	50611
 50612	50612	0	Complete 1-6 Guide: Memory Equipment (Originally 1-8 Guide: Promotion)	1	863065	863066			50612	UiMain		0	50612
 50613	50613	0	Complete 1-8 Guide: Member Info (Originally 2-1 Return to Main Story Guide)	1	84100112	863060			50613	UiMain	GridBtnActivity13	0	50613
 50614	50614	0	Complete 1-8 Guide: Check Research	1	84100112	863067			50614	UiWheelchairManualMain		0	50614
@@ -104,7 +104,7 @@ Id	Priority	Ignore	Desc	GuideType	ConditionId[1]	ConditionId[2]	ConditionId[3]	C
 60711	60711	0	Lv.90 Guide Sequence Pact Main Interface	1	862421	841207			60711	UiMain		0	60711
 60712	60712	0	Lv.90 Guide Sequence Pact Room Interface	1	862421	841207			60712	UiAwarenessDeploy		0	60712
 60713	60713	0	Lv.90 Guide Pact Infinitas Awaken Effect	1	862421	841200	841107		60713	UiMain|UiAwarenessMain		0	60713
-53002	53002	1	Guide: Virtual Horizon	1	862112	775100			53002	UiExpeditionMain		0	53002
+53002	53002	1	Guide Virtual Horizon	1	862112	775100			53002	UiExpeditionMain		0	53002
 53003	53003	1	Guide Chapter 13 Main Story	1	862419	601000	603910		53003	UiTRPGExploreRegion		0	53003
 53004	53004	1	Guide - Photo Mode	1	862112	200000			53004	UiMain		0	53004
 53006	53006	1	Guide - Horizon Phase 2	1	862112	775100			53006	UiExpeditionMain		0	53006
@@ -176,7 +176,7 @@ Id	Priority	Ignore	Desc	GuideType	ConditionId[1]	ConditionId[2]	ConditionId[3]	C
 59031	59031	1	Operation Uniframe Mode Guide	1	862112	84601800			59031	UiPivotCombatMain		0	59031
 59032	59032	1	Guide - Operation Uniframe Energy Supply Effect	1	862112	84601800	859042		59032	UiPivotCombatSecondary		0	59032
 59033	59033	1	Operation Uniframe Central Area Guide	1	862112	84601800			59033	UiPivotCombatNormalDetail		0	59033
-60001	60001	1	Guide - Plum Snow Interface	1	862112	200000			60001	UiRpgMakerGameMain		0	60001
+60001	60001	1	Guide: Plum Snow Interface	1	862112	200000			60001	UiRpgMakerGameMain		0	60001
 60011	60011	1	Guide - Winter Sequence Interface	1	862112	30406			60011	UiDoubleTowers		0	60011
 60012	60012	1	Winter Sequence Guide	1	862112	30406			60012	UiDoubleTowersDeploy		0	60012
 60021	60021	1	Guide - RPG Phase 4 Interface	1	862112	774800			60021	UiRpgTowerMain		0	60021
@@ -483,7 +483,7 @@ Id	Priority	Ignore	Desc	GuideType	ConditionId[1]	ConditionId[2]	ConditionId[3]	C
 63015	63015	0	v3.4 Guide: Roguelike 4 DLC: Proxy Campaign Opening Effect	1	862112	1020835			63015	UiTheatre4OpeningEffect		0	63015
 63016	63016	0	v3.4 Guide: Roguelike 4 DLC: Purple Outer Loop	1	862112	1020770			63016	UiTheatre4Main		0	63016
 63017	63017	0	v3.4 Guide: Roguelike 4 DLC: Sand Table Collapse	1	862112	863026			63017	UiTheatre4PopupNewArea		0	63017
-63030	63030	0	v2.13 Guide: Mine New Weather Affix	1	862112	772201	862700	862702	63030	UiStrongholdFightMain		0	63030
+63030	63030	0	v2.13 Guide Mine New Weather  Affix	1	862112	772201	862700	862702	63030	UiStrongholdFightMain		0	63030
 63041	63041	1	v2.15 Guide: Battle Rating 1: First Try	1	862112	772270			63041	UiBossInshotMain		0	63041
 63042	63042	1	v2.15 Guide: Battle Rating 2: Character Interface	1	862112	772270			63042	UiBattleRoomRoleDetail	PanelBossInshotCharacterDetail(Clone)	0	63042
 63050	63050	1	v2.15 Guide: Wreck-It Froggie: First Try	1	862112	774800			63050	UiFangKuaiMain		0	63050
@@ -754,12 +754,12 @@ Id	Priority	Ignore	Desc	GuideType	ConditionId[1]	ConditionId[2]	ConditionId[3]	C
 64544	64544	1	v4.3 幸运房东2.0 601商店红潮	1	862112	774800	863225		64544	UiLuckyTenant2Chess		0	64544
 64545	64545	0	v4.3 幸运房东2.0 602商店红潮	1	862112	774800	863220		64545	UiLuckyTenant2Chess		0	64545
 64546	64546	0	v4.3 幸运房东2.0 删除棋子	1	862112	774800			64546	UiLuckyTenant2PopupDeleteChess		0	64546
-64601	64601	0	v4.4 战双兄弟 主界面介绍	1	862112	774800			64601	UiPBRMain		0	64601
-64602	64602	0	v4.4 战双兄弟 商店介绍	1	862112	774800			64602	UiPBRShopNew		0	64602
-64603	64603	0	v4.4 战双兄弟 商店升阶	1	862112	774800	863144		64603	UiPBRShopNew		0	64603
-64604	64604	0	v4.4 战双兄弟 养成界面	1	862112	774800			64604	UiPBRGenius		0	64604
-64605	64605	0	v4.4 战双兄弟 关卡失败	1	862112	774800			64605	UiPBRSettlement	TxtResultFail	0	64605
-64606	64606	0	v4.4 战双兄弟 关卡胜利	1	862112	774800			64606	UiPBRSettlement	BtnNext	0	64606
+64601	64601	1	v4.4 战双兄弟 主界面介绍	1	862112	774800			64601	UiPBRMain		0	64601
+64602	64602	1	v4.4 战双兄弟 商店介绍	1	862112	774800			64602	UiPBRShopNew		0	64602
+64603	64603	1	v4.4 战双兄弟 商店升阶	1	862112	774800	863144		64603	UiPBRShopNew		0	64603
+64604	64604	1	v4.4 战双兄弟 养成界面	1	862112	774800			64604	UiPBRGenius		0	64604
+64605	64605	1	v4.4 战双兄弟 关卡失败	1	862112	774800			64605	UiPBRSettlement	TxtResultFail	0	64605
+64606	64606	1	v4.4 战双兄弟 关卡胜利	1	862112	774800			64606	UiPBRSettlement	BtnNext	0	64606
 64611	64611	0	v4.4 疾速追缉	1	862112	774800			64611	UiBountyChallengeMain		0	64611
 64621	64621	0	v4.4 神威大连线 主界面	1	862112	774800			64621	UiLineArithmetic3Main		0	64621
 64622	64622	0	v4.4 神威大连线 101	1	862112	774800	863145		64622	UiLineArithmetic3Game		0	64622
@@ -822,3 +822,18 @@ Id	Priority	Ignore	Desc	GuideType	ConditionId[1]	ConditionId[2]	ConditionId[3]	C
 64831	64831	0	v4.6 引导玩家好感剧情领角色（海伦汀）	1	862112	863261			64831	UiMain		0	64831
 64841	64841	0	v4.6 引导mini改造-首次进入	1	862112	774800			64841	UiSoloReformMain		0	64841
 64842	64842	0	v4.6 引导超难关第五关	1	862112	774800			64842	UiActivityBossSingleRoot	goHardRoot	0	64842
+64901	64901	0	v4.7 Luna Coating Pool Guide	1	862112	774800			64901	UiLottoLuna		0	64901
+64902	64902	0	v4.7 Vera Coating Pool Guide	1	862112	774800			64902	UiLottoVera		0	64902
+64903	64903	0	v4.7 Karenina Coating Pool Guide	1	862112	774800			64903	UiLottoKarenina		0	64903
+64904	64904	0	v4.7 The Merciful One Coating Pool Guide	1	862112	774800			64904	UiLottoCibeizhe		0	64904
+64911	64911	0	v4.7 战双兄弟2.0 主界面介绍	1	862112	774800			64911	UiPBRMain		0	64911
+64912	64912	0	v4.7 战双兄弟2.0 商店介绍	1	862112	774800			64912	UiPBRShopNew		0	64912
+64913	64913	0	v4.7 战双兄弟2.0 商店升阶	1	862112	774800	863144		64913	UiPBRShopNew		0	64913
+64914	64914	0	v4.7 战双兄弟2.0 养成界面	1	862112	774800			64914	UiPBRGenius		0	64914
+64915	64915	0	v4.7 战双兄弟2.0 关卡失败	1	862112	774800			64915	UiPBRSettlement	TxtResultFail	0	64915
+64916	64916	0	v4.7 战双兄弟2.0 关卡胜利	1	862112	774800			64916	UiPBRSettlement	BtnNext	0	64916
+64921	64921	0	v4.7 七夕活动主界面	1	862112	774800			64921	UiEnvelopeGuessingMain		0	64921
+64922	64922	0	v4.7 七夕开包	1	862112	774800			64922	UiEnvelopeGuessingOpenPackage		0	64922
+64923	64923	0	v4.7 七夕乐队	1	862112	774800	863178		64923	UiEnvelopeGuessingMain		0	64923
+64931	64931	0	v4.7 主线断章提醒（海外专用）	1	863179	863180	863181	863182	64931	UiNewFuben|UiActivityBriefBase		0	64931
+64932	64932	0	v4.7 主线断章提醒空引导（海外专用）	1	863179	863180	863181	863183	64932	UiMainLine2Chapter		0	64932

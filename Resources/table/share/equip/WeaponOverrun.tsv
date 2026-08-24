@@ -88,3 +88,4 @@ Id	WeaponId	Level	LevelName	ConsumeItemIds[1]	ConsumeItemCounts[1]	OverrunType	C
 87	2526001	6	2_4	34001	5	3				Signature: Fugal Sonata +1			Signature Harmony — 1					142.3	276.0	240.5					248.3	72.4	-188.6					-511.1,125.4|-206.3,3.2|-148.12,3.2	-490.4,129.6|-206.3,3.2|-148.12,3.2	-239.39,216.8|-206.3,3.2|-148.12,3.2	-0.8112	-0.5552	-21.3847	-23.2469			1531005	32.8851	-32.4511	1535170	1
 88	2526001	7	2_5	34001	5	3				Signature: Fugal Sonata +1			Signature Harmony — 2						-644.9	-615.0999						-213.8	-40.5999						679.9,-196.4|194.5,18.5|140.9,18.5	286.52,-461.7|195.8,18.5|140.9,18.5	-0.6251	0.4575	-21.4584	-4.6015			1531005	26.7199	24.891	1535170	1
 89	2666001	1	1	34000	25	1	1	47	1200	Harmony Absorption: Piece count for Memory Set effects +2	90																																		
+90	2676001	1	1	34000	25	1	1	47	1200	Harmony Absorption: Piece count for Memory Set effects +2	90																																		

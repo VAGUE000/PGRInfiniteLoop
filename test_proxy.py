@@ -41,6 +41,7 @@ class ProxyRoutingTests(unittest.TestCase):
         )
         return SimpleNamespace(request=request, response=None)
 
+
     def test_notice_html_stays_on_upstream_cdn(self):
         flow = self.flow("/prod/client/notice/html/current-notice.html?cache=1")
 

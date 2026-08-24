@@ -1,4 +1,4 @@
-﻿using AscNet.Common.Database;
+using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.item;
@@ -265,6 +265,8 @@ namespace AscNet.GameServer.Handlers
             foreach ((int itemId, int count, _, _) in materials)
                 notifyItems.ItemDataList.Add(session.inventory.Do(itemId, -count));
             session.SendPush(notifyItems);
+            session.inventory.Save();
+            session.character.Save();
             session.SendResponse(new PartnerLevelUpResponse
             {
                 Level = partner.Level,
@@ -294,6 +296,8 @@ namespace AscNet.GameServer.Handlers
             partner.Level = 1;
             partner.Exp = 0;
             session.SendPush(notifyItems);
+            session.inventory.Save();
+            session.character.Save();
             session.SendResponse(new PartnerBreakThroughResponse
             {
                 BreakTimes = partner.BreakThrough
@@ -344,6 +348,8 @@ namespace AscNet.GameServer.Handlers
             skill.Level = checked(skill.Level + times);
             session.SendPush(notifyItems);
             SendPartnerUpdate(session, partner);
+            session.inventory.Save();
+            session.character.Save();
             session.SendResponse(new PartnerSkillUpResponse
             {
                 SkillUpInfo =
@@ -464,6 +470,7 @@ namespace AscNet.GameServer.Handlers
             }
 
             SendPartnerUpdate(session, partner);
+            session.character.Save();
             session.SendResponse(new PartnerSkillWearResponse(), packet.Id);
         }
 
@@ -503,6 +510,7 @@ namespace AscNet.GameServer.Handlers
                 PartnerDataList = [.. materials, partner],
                 OperateTypes = [.. Enumerable.Repeat(3, materials.Count), 2]
             });
+            session.character.Save();
             session.SendResponse(new PartnerStarActivateResponse(), packet.Id);
         }
 
@@ -533,6 +541,8 @@ namespace AscNet.GameServer.Handlers
             partner.Quality++;
             session.SendPush(notifyItems);
             SendPartnerUpdate(session, partner);
+            session.inventory.Save();
+            session.character.Save();
             session.SendResponse(new PartnerEvolutionResponse(), packet.Id);
         }
 
@@ -611,6 +621,7 @@ namespace AscNet.GameServer.Handlers
                 PartnerDataList = displaced is null ? [partner] : [displaced, partner],
                 OperateTypes = displaced is null ? [3] : [2, 3]
             });
+            session.character.Save();
             session.SendResponse(new PartnerCarryResponse(), packet.Id);
         }
 
@@ -638,6 +649,13 @@ namespace AscNet.GameServer.Handlers
 
         private static PartnerData? FindPartner(Session session, int partnerId) =>
             session.character.Partners?.Find(partner => partner.Id == partnerId);
+        internal static int AllocatePartnerId(AscNet.Common.Database.Character character)
+        {
+            character.Partners ??= [];
+            return character.Partners.Count == 0
+                ? 1
+                : checked(character.Partners.Max(partner => partner.Id) + 1);
+        }
 
         private static PartnerBreakThroughTable? FindBreakthrough(PartnerData partner) =>
             TableReaderV2.Parse<PartnerBreakThroughTable>()
@@ -698,7 +716,7 @@ namespace AscNet.GameServer.Handlers
                 : null;
         }
 
-        private static PartnerData CreatePartner(int id, int templateId)
+        internal static PartnerData CreatePartner(int id, int templateId)
         {
             PartnerTable partnerConfig = TableReaderV2.Parse<PartnerTable>()
                 .First(row => row.Id == templateId);

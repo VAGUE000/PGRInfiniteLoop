@@ -21,3 +21,4 @@ Id	Priority	Name	NameEN	SkipId	TimeId	Conditions[1]	BtnIcon	LeftTimeFun	EventId	
 23		Christmas Bliss	Christmas Bliss	189071			Assets/Product/Texture/Image/UiMain/MainChristmas.png			CONDITION_DAILY_RESET					
 24		Auspicious Treasury	Auspicious Treasury	1300626		774800	Assets/Product/Texture/Image/UiMain/MainAccumulateExpend.png	GetAccumulateExpendShopLeftTime		CONDITION_ACCUMULATE_EXPEND_SHOP_NOTIFY					
 25		Wishing Target	Wishing Target	20361	46712	770402	Assets/Product/Texture/Image/UiMain/MainBtnSummerSign306.png								
+26		Strings Workshop	Strings Workshop	189072	49651		Assets/Product/Texture/Image/UiMain/Main407MusicH501.png			CONDITION_DAILY_RESET					

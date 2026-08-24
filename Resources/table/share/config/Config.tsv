@@ -368,7 +368,7 @@ RefundAutoBanReason	Refund Misconduct
 RelieveFubenBossSingleTeamAstrict	0
 AreaMaxProtectScore	2
 ArenaProtectNotApplicable	7
-BosssInshotTalentSlotMax	2
+BosssInshotTalentSlotMax	1
 PlayerChangeGenderInterval	2592000
 PlayerFirstSetGenderReward	64400
 Maverick3TalentCoinId	97038

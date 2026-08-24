@@ -61,7 +61,7 @@ CharacterId	SkillGroupId[1]	Pos[1]	SkillGroupId[2]	Pos[2]	SkillGroupId[3]	Pos[3]
 1301002																																
 1241003	1243280	1	1243290	2	1243300	3																										
 1211003																																
-1021006																																
+1021006	1026280	1	1026290	2	1026300	3																										
 1311002																																
 1051005	1055280	1	1055290	2	1055300	3																										
 1321003																																
@@ -81,3 +81,4 @@ CharacterId	SkillGroupId[1]	Pos[1]	SkillGroupId[2]	Pos[2]	SkillGroupId[3]	Pos[3]
 1061004																																
 1021007																																
 1401003																																
+1071005																																

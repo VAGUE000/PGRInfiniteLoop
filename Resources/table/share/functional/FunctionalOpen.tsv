@@ -180,6 +180,7 @@ Id	Name	Priority	Hint	Condition[1]	Condition[2]	Type	FunctionType
 10419	Warm-Up Guess-Who-I-AM Puzzle	79		774800		1	1
 10450	Resource Shop	106		771000		1	1
 10499	愚人节活动	131				1	1
+10512	Simulated Battlefield 2x Bonus Mission	134		770422		1	1
 109001	Special Training RS-2	81		9501		2	1
 109002	Special Training RS-3	82		9502		2	1
 109003	Special Training RS-4	83		9503		2	1
@@ -291,3 +292,8 @@ Id	Name	Priority	Hint	Condition[1]	Condition[2]	Type	FunctionType
 10501	Shrouded Requiem	70		774800		1	1
 10502	Phylotree Dossier	70		770431		1	1
 10503	Minigame Collection	70		774800		1	1
+10504	Grand Dyeing Mode	70		774800		1	1
+10505	Concert Preview Event	70		774800		1	1
+10506	Shrouded Requiem - Phantom Clash	70		1021100		1	1
+10507	Double Seventh Festival Card Pack	70		774800		1	1
+10508	CD Player	1				1	1

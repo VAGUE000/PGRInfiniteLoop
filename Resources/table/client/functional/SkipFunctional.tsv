@@ -243,6 +243,15 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 40188	2	UiAutoWindow	189			1						1050153							
 40189	2	UiAutoWindow	190			1						1050153							
 40190	2	UiAutoWindow	191			1						1050153							
+40191	2	UiAutoWindow	192	4.7卡列特效打脸图		1						1050153							
+40192	2	UiAutoWindow	193	4.7比安卡特效打脸图		1						1050153							
+40193	2	UiAutoWindow	194	4.6跨4.7预热打脸图		1						1050153							
+40194	2	UiAutoWindow	195	4.8洁塔薇联动皮打脸		1						1050153							
+40195	2	UiAutoWindow	196	4.7跨4.8预热打脸1		1						1050153							
+40196	2	UiAutoWindow	197	4.7跨4.8预热打脸2		1						1050153							
+40197	2	UiAutoWindow	198	4.7500卡池复刻打脸		1						1050153							
+40198	2	UiAutoWindow	199	土豆兄弟打脸图		1						1050153							
+40199	2	UiAutoWindow	200	4.7露娜涂鸦打脸图		1						1050153							
 40756	7	OnOpenRepeatChallengeActivity		Advance to Simulated Battlefield	10309	1	1						1						
 40757	7	OnOpenRepeatChallengeActivity		Advance to Simulated Battlefield	10309	1	1						1						
 40758	7	OnOpenUiArena		War Zone	10204	1							1						
@@ -387,6 +396,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 50120	2	UiSignBanner	112	4.5端午节签到		1						1050153		47111					
 50121	2	UiSignBanner	113	【每次新建】v4.5周卡签到弹窗跳转		1													
 50122	2	UiSignBanner	114	4.6版本签到		1								48110					
+50123	2	UiSignBanner	115	4.7版本签到		1								49110					
 500	1	UiMedalUnlock		Go to Unlock Medals		1													
 11	2	UiDrawGroup	1	Research System		1													
 21	4		2	Back to Main		1													
@@ -705,6 +715,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 533	7	SkipToMainLine2		New Main Story Floating Record Chapter ER15	10308	1	2015					1050153							
 534	7	SkipToMainLine2		New Main Story Chapter 41	10308	1	1041					1050153							
 535	7	SkipToMainLine2		New Main Story Floating Record Chapter ER16	10308	1	2016					1050153							
+536	7	SkipToMainLine2		New Main Story Chapter 42	10308	1	1042					1050153							
 700	3	UiNewFuben	12010102	3	10103	1													
 701	3	UiNewFuben	12010202	Go to Stronghold mode	10103	1													
 702	3	UiNewFuben	12010402	Go to Stronghold mode	10103	1													
@@ -1318,6 +1329,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 7140	7	SkipToPartnerTeachingChapter		To CUB Tutorial Trial - Chapter 33	1801	1	33												
 7141	7	SkipToPartnerTeachingChapter		To CUB Tutorial Trial - Chapter 34	1801	1	34												
 7142	7	SkipToPartnerTeachingChapter		To CUB Tutorial Trial - Chapter 35	1801	1	35					1050153							
+7143	7	SkipToPartnerTeachingChapter		前往辅助机教学试玩-第三十七章	1801	1	37					1050153							
 7200	1	UiNewFuben		Go to Member Tutorial Stage (original Celica)		1													
 7201	1	UiCharacterSystemV2P6		Go to Enhance Your Member	101	1	0												
 7202	1	UiCharacterSystemV2P6		Go to Upgrade Your Member	101	1	0												
@@ -1669,7 +1681,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 10049	7	SkipToNewDrawMain		Go to Devil May Cry Collab Research - Vergil	401	1	1	31	5608									2025/8/6 2:00	2025/9/18 1:59
 10050	7	SkipToNewDrawMain		Go to Devil May Cry Collab Research - Dante	401	1	1	29	5609									2025/8/6 2:00	2025/9/18 1:59
 10051	7	SkipToNewDrawMain		Go to Devil May Cry Collab Research - Netherworld Arm	401	1	1	34	7049									2025/8/6 2:00	2025/9/18 1:59
-15001	7	OnOpenGuild		Go to Guild	1901	1							1						
+15001	7	OnOpenGuildDorm		Go to Guild Dorm	1901	1							1						
 15002	6	UiShop	3	Point Shop	1001	1	1	0	4001						UiDlcMultiPlayerShop				
 15004	6	UiShop	3	Go to Ore Shop	1001	1	1	0	5001										
 15005	6	UiShop	3	Go to Weapon Resonance Exchange Shop	1001	1	1	0	111										
@@ -1757,6 +1769,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 19079	7	SkipToCharacterV2P6		Go to Members	101	1	1061004												
 19080	7	SkipToCharacterV2P6		Go to Members	101	1	1021007												
 19081	7	SkipToCharacterV2P6		Go to Members	101	1	1401003												
+19082	7	SkipToCharacterV2P6		Go to Members	101	1	1071005												
 20000	1	UiNewFuben		Event Quest		1													
 20001	7	OnOpenUiActivityBossSingle		Gestalt		1													
 20002	7	OnOpenUiOnlineBoss		Co-op	10302	1													
@@ -1990,7 +2003,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 20232	7	OnOpenGacha		V2.17 Pool Story [Lost in Whitebloom]	10306	1	19	1											
 20233	6	UiWelfare		Complete "Dusk's Shade" event missions	10476	1	1	104											
 20234	6	UiFubenPracticeCharacterDetail		Skip to Celica's tutorial	1800	1	1021005	30100099											
-20235	7	OnOpenCharacterFileFubenActivity		New Character Theme Trial (Edit event no. after the 33rd event)	10325	1	49												
+20235	7	OnOpenCharacterFileFubenActivity		New Character Theme Trial (Edit event no. after the 33rd event)	10325	1	50												
 20236	6	UiFubenPracticeStageListRoot		To Celica Crammer (New jump id after the 33rd event)	10325	1	33						1						
 20237	7	OpenLotto		Advance to event [Luna Pool Story].	10306	1	16	2											
 20238	6	UiWelfare		Complete "King's Gambit" event missions	1	1	1	105											
@@ -2136,7 +2149,15 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 20380	6	UiFubenPracticeStageListRoot		海伦汀赛利卡补习班跳转（33期之后，新增跳转id）	10325	1	49						1						
 20381	6	UiNewDrawMain		【v4.6海伦汀】前往主题卡池	401	1	1	35	1499									2026/7/17 0:00	2026/8/18 23:00
 20382	6	UiPurchase		【v4.6海伦汀】前往涂装补给包	3	1	2	0	4									2026/7/17 0:00	2026/8/18 23:00
+20383	6	UiWelfare		Complete the "Scarlet Arrival" event mission	1	1	1	99											
 20384	6	UiFubenPracticeCharacterDetail		跳转赛利卡教学（七实跃升）	1800	1	1051005	30100229											
+20385	6	UiFavorabilityStory		Advance to Karenina's Affection Story		1	1071005					1050153	1						
+20386	6	UiFubenPracticeStageListRoot		To Karenina: Celica's Class (New jump id after the 33rd event)	10325	1	50						1						
+20387	6	UiNewDrawMain		【v4.7卡列】前往主题卡池	401	1	1	11										2026/8/19 0:00	2026/9/23 23:00
+20388	6	UiPurchase		【v4.7卡列】前往涂装补给包	3	1	2	0	4									2026/8/19 0:00	2026/9/23 23:00
+20390	7	SkipToMainLine2				1	1042					1050153							
+20391	7	SkipToCharacterV2P6			101	1	1071005												
+20392	6	UiFubenPracticeCharacterDetail		跳转赛利卡教学（火露跃升）	1800	1	1021006	30100230											
 11010101	3	UiNewFuben	11010101	困难1-1		1													
 11010102	3	UiNewFuben	11010102	困难1-2		1													
 11010103	3	UiNewFuben	11010103	困难1-3		1													
@@ -2840,6 +2861,14 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 80312	6	UiShop	3	Coating Shop	1001	1	1	0	502									2026/8/18 23:00	
 80313	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/7/17 0:00	2026/8/18 23:00
 80314	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/7/17 0:00	2026/8/18 23:00
+80315	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/8/19 0:00	2026/9/23 23:00
+80316	6	UiShop	3	Coating Shop	1001	1	1	0	504									2026/9/23 23:00	
+80317	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/8/19 0:00	2026/9/23 23:00
+80318	6	UiShop	3	Coating Shop	1001	1	1	0	502									2026/9/23 23:00	
+80319	10	XPBRGame		Go to the Blazing Rhapsody event.	10500	1						1050153			UiPBRTask	UiPBRMain		2025/8/19 5:00	2026/9/23 5:00
+80320	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/8/19 0:00	2026/9/23 23:00
+80322	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/8/19 0:00	2026/9/23 23:00
+80323	6	UiPurchase		Purchase Coating Supply Pack	5	1	2	0	4									2026/8/19 0:00	2026/9/23 23:00
 81001	7	SkipToSpringFestivalActivity		Purchase Coating Supply Pack		1													
 81002	7	SkipToSpringFestivalCollectWord		Card Collection Event	1308	1													
 81003	7	SkipToSpringFestivalSmashEggs		Smash Eggs Event		1													
@@ -2974,6 +3003,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 189069	9		10	夏浪合击															
 189070	9		11	Fantasy Homeward															
 189071	9		15	Christmas Bliss															
+189072	9		16	Strings Workshop															
 89074	7	SkipToTemple2		Temple Fair 2															
 89075	7	SkipToGame2048Activity		2048 Relax	10475														
 89076	7	SkipToBigWorld		World Mode	20000							1050153							
@@ -3002,7 +3032,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 89099	6	UiFubenFashionFittingNew		V3.6 Summer Story Stage - Lucia Coating Trial															
 89100	7	SkipToRace		Quiz Event	10354	1							1						
 89101	7	SkipToBigWorld		4.2罗塞塔主线，跳空花罗塞塔Quest	20000	1	0	0	1	2		1050153							
-89102	10	XTheatre6		The Godfall Revelation	10501	1						1050153	1						
+89102	10	XTheatre6		Shrouded Requiem	10501	1						1050153	1						
 89103	2	UiDownloadFashion		Coating Data Download Interface															
 89104	7	SkipToBigWorld		4.5空花，跳转2.0历程Quest 7003	20000	1	0	0	1	3	4	1050153							
 89105	10	XDyeMergeGame		Grand Dyeing	10504								1						
@@ -3013,6 +3043,8 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 89110	7	SkipToFashionStoryChapter	17		10341	1						1050153							
 89111	7	SkipToFashionStoryChapter	18		10341	1						1050153							
 89112	10	XTheatre6		Shrouded Requiem - Phantom Clash	10506	1						1021100	1						
+89113	7	SkipToEnvelopeGuessing		Love's Leisure Hour	10507								1						
+89114	10	XMusicPlayer				1	1	81											
 90000	6	UiShop		Exchange Shop 1	1001	1	1	0	108										
 90001	6	UiShop		Exchange Shop 2	1001	1	1	0	109										
 90002	6	UiShop		Coating Exchange Shop	1001	1	1	0	110										
@@ -3062,6 +3094,7 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 90046	7	OnOpenCerberusGame		Lightning and Thunder	10448								1						
 90047	7	SkipToDlcRelink		前往联机共斗	10493	1							1						
 90048	7	SkipToCloudGame		Cloud Gaming															
+90049	7	SkipToTeamPrefab		Skip to Squad Presets			1												
 90050	1	UiLoginVideoV4P0		4.0 Opening CG		1													
 90051	7	SkipToNewDrawMain		Go to Phylotree Research	401	1	1	11	1438										
 90052	7	SkipToUiWelfare		To 1st Recharge Event Screen			3	3											
@@ -3081,7 +3114,17 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 90066	7	SkipToNewDrawMain		Go to Phylotree Alpha Research	401	1	1	11	1488										
 90067	7	SkipToNewDrawMain		Go to Phylotree Liv Research	401	1	1	11	1498										
 90068	7	SkipToConcertPreHeatingMain		Go to Event [Dimensional Tuner]	10505							1050153		48801					
-1000001	2	UiSet	12		7		7												
+90069	7	OpenLotto		Advance to event [Tainted Moonrise]	10306	1	2001	1											
+90070	7	OpenLotto		Advance to event [Vera Pool]	10306	1	2002	1											
+90071	7	OpenLotto		Advance to event [Karenina Pool]	10306	1	2003	1											
+90072	7	OpenLotto		Go to Event [Nightfall Finale]	10306	1	2004	1											
+90075	6	UiPurchase		4.7跳转到音乐场景礼包	3	1	2	0	7										
+90076	6	UiPurchase		4.7跳转到音乐涂装礼包	3	1	2	0	4										
+90078	7	OpenLotto		Advance to event [Luna Pool Story].	10306	1	2001	2											
+90079	7	OpenLotto		前往活动【薇拉卡池剧情】	10306	1	2002	2											
+90080	7	OpenLotto		Advance to event [Karenina Pool Story]	10306	1	2003	2											
+90081	7	OpenLotto		前往活动【慈悲者卡池剧情】	10306	1	2004	2											
+1000001	2	UiSet	12		7		0	0	1										
 1300001	7	OnOpenSlotmachine		Operation Energy Recycling			1												
 1300002	2	UiSignBanner	1300001	[Frozen] Sign-in															
 1300010	7	OnOpenUiActivityBranch		Mass Deterioration	10303		1												
@@ -3291,7 +3334,6 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 1300610	7	OnOpenCharacterFileFubenActivity		3.7角色试玩关	10325	1	41												
 1300611	2	UiSignBanner	1300610	EN3.8版本签到跳转															
 1300612	7	OnOpenCharacterFileFubenActivity		3.8角色试玩关	10325	1	42												
-90049	7	SkipToTeamPrefab		Skip to Squad Presets			1												
 1300616	2	UiSignBanner	1300620	EN3.8五周年签到跳转															
 1300621	6	UiActivityBriefBase		EN4.0活动面板deeplink	10303	1	0	0	0					2160700					
 1300622	6	UiNewDrawMain		EN4.0丽芙角色卡池deeplink	401	1	1	11						2160701					
@@ -3309,7 +3351,9 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 1300708	6	UiNewDrawMain		EN4.5神白毛角色卡池deeplink	401	1	1	11	1488					2160713					
 1300709	7	OnOpenGacha		EN4.5神丽芙涂装卡池deeplink	403	1	49							2160714					
 1300710	6	UiActivityBriefBase		EN4.6活动主题面板deeplink	10303	1	0	0	0					2160715					
-1300711	6	UiNewDrawMain		EN4.6海伦汀角色卡池deeplink	401	1	1	35						2160716					
+1300711	6	UiNewDrawMain		EN4.6海伦汀角色卡池deeplink	401	1	1	11						2160716					
+1300712	6	UiActivityBriefBase		EN4.7活动主题面板deeplink	10303	1	0	0	0					2160717					
+1300713	6	UiNewDrawMain		EN4.7卡列角色卡池deeplink	401	1	1	11						2160718					
 1300626	2	UiAccumulateExpendShopMain		累销商店			1												
 1300627	7	OpenUiPaintingExperiencePass		Coating Trial			58												
 1300628	7	OpenUiSoloReformChapterDetail		MiniRpg章节跳转			1	1	30163345										
@@ -3319,16 +3363,20 @@ SkipId	Origin	UiName	ParamId	Explain	FunctionalId	IsHideFunc	CustomParams[1]	Cus
 1300632	7	OpenUiSoloReformChapterDetail		MiniRpg章节跳转			1	1	30163347										
 1300633	7	OpenUiSoloReformChapterDetail		MiniRpg章节跳转			1	1	30163348										
 1300634	7	OpenUiSoloReformChapterDetail		MiniRpg章节跳转			1	1	30163349										
-1300635	10	XPBRGame		Placeholder_战双兄弟跳转占位	10500								1	46930					
+1300635	10	XPBRGame		Go to the Blazing Rhapsody event.	10500								1	49920					
 1300636	7	OpenUiPaintingExperiencePass		涂装试玩-4.3薇拉			119												
 1300637	7	OpenUiPaintingExperiencePass		涂装试玩-4.3曲			112												
 1300638	7	SkipToUiPurchase		Go to BUTTER DOG Pack banner			0	239											
 1300639	7	OpenUiPaintingExperiencePass		涂装试玩-4.4神威			120												
 1300640	1	UiMiniGamesCollectionMain		To Minigame Collection	10503							1050153	1	47501					
 1300641	6	UiPurchase		黄油小狗礼包界面			2	0	9										
-1300642	2	UiPassportAutoWindow	1300642	BP Face Close-Up			1786309200	1786914000				775500							
+1300642	2	UiPassportAutoWindow	1300642	BP Face Close-Up			1789333200	1789938000				775500							
 1300643	7	OpenUiPaintingExperiencePass		涂装试玩-4.5白毛			121												
 1300644	7	OpenUiPaintingExperiencePass		涂装试玩-4.5奶龙			122												
 1300645	7	OpenUiPaintingExperiencePass		涂装试玩-4.6海伦汀			124					1050153							
 1300646	7	OpenUiPaintingExperiencePass		涂装试玩-4.6The赛			123					1050153							
-1300647	10	XPBRGame			10500							1050153	1	48821				2026/8/28 10:00	2026/9/20 5:00
+1300647	10	XPBRGame			10500							1050153	1	49920					
+1300648	7	OpenUiPaintingExperiencePass		涂装试玩-4.8洁塔薇			1					1050153							
+1300649	7	OpenUiPaintingExperiencePass		涂装试玩-4.7卡列			128					1050153							
+1300650	7	OpenUiPaintingExperiencePass		涂装试玩-4.7比安卡			125					1050153							
+1300651	7	OpenUiPaintingExperiencePass		涂装试玩-4.7露娜涂鸦			133					1050153							

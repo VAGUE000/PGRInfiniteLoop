@@ -1,4 +1,4 @@
-﻿using AscNet.Common.MsgPack;
+using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.character;
 using AscNet.Table.V2.share.fashion;
@@ -188,18 +188,30 @@ namespace AscNet.GameServer.Handlers
         [RequestPacketHandler("FashionUseRequest")]
         public static void HandleFashionUseRequestHandler(Session session, Packet.Request packet)
         {
-            FashionUseRequest req = packet.Deserialize<FashionUseRequest>();
-            var character = session.character.Characters.Find(x => x.Id == TableReaderV2.Parse<FashionTable>().Find(x => x.Id == req.FashionId)?.CharacterId);
+            const int invalidRequestCode = 20012001;
+            FashionUseRequest request = packet.Deserialize<FashionUseRequest>();
+            FashionTable? fashionRow = TableReaderV2.Parse<FashionTable>().Find(candidate => candidate.Id == request.FashionId);
+            CharacterData? character = fashionRow is not null
+                ? session.character.Characters.Find(candidate => candidate.Id == fashionRow.CharacterId)
+                : null;
+            FashionList? ownedFashion = request.FashionId > 0
+                ? session.character.Fashions.Find(candidate => candidate.Id == request.FashionId && !candidate.IsLock)
+                : null;
 
-            if (character is not null)
+            // The equipped body coating must be an unlocked fashion belonging to an owned character.
+            if (character is null || ownedFashion is null)
             {
-                character.FashionId = req.FashionId;
-
-                NotifyCharacterDataList notifyCharacterData = new();
-                notifyCharacterData.CharacterDataList.Add(character);
-                session.SendPush(notifyCharacterData);
+                session.SendResponse(new FashionUseResponse { Code = invalidRequestCode }, packet.Id);
+                return;
             }
 
+            if (character.FashionId != request.FashionId)
+            {
+                character.FashionId = request.FashionId;
+                session.character.Save();
+            }
+
+            session.SendPush(new NotifyCharacterDataList { CharacterDataList = { character } });
             session.SendResponse(new FashionUseResponse(), packet.Id);
         }
 

@@ -393,4 +393,4 @@ test_proxy.py
 test_protocol_gap.py 
 
 # protocol gap tables
-Resources/table.pre-4.6.6/
+Resources/table.pre-4.7.7/

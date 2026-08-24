@@ -1,4 +1,4 @@
-﻿using AscNet.Common;
+using AscNet.Common;
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
@@ -8,6 +8,7 @@ using AscNet.Table.V2.share.character.grade;
 using AscNet.Table.V2.share.character.quality;
 using AscNet.Table.V2.share.trust;
 using AscNet.Table.V2.share.character.skill;
+using AscNet.Table.V2.share.fashion;
 using AscNet.Table.V2.share.item;
 using MessagePack;
 
@@ -43,17 +44,25 @@ namespace AscNet.GameServer.Handlers
     [MessagePackObject(true)]
     public class CharacterEnhanceSkillNoticeRequest
     {
-        public int TemplateId;
         public int CharacterId;
-        public int Id;
     }
-
     [MessagePackObject(true)]
     public class CharacterEnhanceSkillNoticeResponse
     {
         public int Code;
     }
 
+    [MessagePackObject(true)]
+    public class CharacterSwitchEnhanceSkillRequest
+    {
+        public int SkillId;
+    }
+
+    [MessagePackObject(true)]
+    public class CharacterSwitchEnhanceSkillResponse
+    {
+        public int Code;
+    }
     [MessagePackObject(true)]
     public class CharacterResetNewFlagRequest
     {
@@ -237,6 +246,8 @@ namespace AscNet.GameServer.Handlers
             Dictionary<int, int> costs,
             EnhanceSkillUpgradeTable upgrade)
         {
+            if (upgrade.CostItem is null || upgrade.CostItemCount is null)
+                return;
             int costCount = Math.Min(upgrade.CostItem.Count, upgrade.CostItemCount.Count);
             for (int index = 0; index < costCount; index++)
             {
@@ -246,6 +257,38 @@ namespace AscNet.GameServer.Handlers
                     continue;
                 costs[itemId] = costs.GetValueOrDefault(itemId) + count;
             }
+        }
+        private static bool HasEnoughItems(Session session, int itemId, int required)
+        {
+            if (required <= 0)
+                return true;
+            Item? item = session.inventory.Items.FirstOrDefault(candidate => candidate.Id == itemId);
+            return item is not null && item.Count >= required;
+        }
+        private static bool HasEnhanceCost(EnhanceSkillUpgradeTable upgrade)
+        {
+            if (upgrade.CostItem is null || upgrade.CostItemCount is null)
+                return false;
+            int costCount = Math.Min(upgrade.CostItem.Count, upgrade.CostItemCount.Count);
+            for (int index = 0; index < costCount; index++)
+            {
+                if (upgrade.CostItem[index] > 0 && upgrade.CostItemCount[index] > 0)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool HasEnoughInventory(Session session, IReadOnlyDictionary<int, int> costs)
+        {
+            foreach ((int itemId, int count) in costs)
+            {
+                if (count <= 0)
+                    continue;
+                Item? item = session.inventory.Items.FirstOrDefault(candidate => candidate.Id == itemId);
+                if (item is null || item.Count < count)
+                    return false;
+            }
+            return true;
         }
 
         [RequestPacketHandler("CharacterLevelUpRequest")]
@@ -711,7 +754,31 @@ namespace AscNet.GameServer.Handlers
         {
             CharacterUpgradeSkillGroupRequest request = packet.Deserialize<CharacterUpgradeSkillGroupRequest>();
 
-            var upgradeResult = session.character.UpgradeCharacterSkillGroup(request.SkillGroupId, request.Count);
+            UpgradeCharacterSkillResult upgradeResult;
+            try
+            {
+                upgradeResult = session.character.UpgradeCharacterSkillGroup(request.SkillGroupId, request.Count);
+            }
+            catch (ServerCodeException ex)
+            {
+                session.SendResponse(new CharacterUpgradeSkillGroupResponse { Code = ex.Code }, packet.Id);
+                return;
+            }
+
+            if (!HasEnoughItems(session, Inventory.Coin, upgradeResult.CoinCost)
+                || !HasEnoughItems(session, Inventory.SkillPoint, upgradeResult.SkillPointCost))
+            {
+                // ItemCountNotEnough
+                session.SendResponse(new CharacterUpgradeSkillGroupResponse { Code = 20012004 }, packet.Id);
+                return;
+            }
+
+            // Apply the fully-preflighted level deltas atomically with inventory consumption.
+            foreach (uint skillId in Character.ResolveCharacterSkillIdsForGroupId(request.SkillGroupId))
+            {
+                foreach (CharacterData character in session.character.Characters.Where(c => c.SkillList.Any(s => s.Id == skillId)))
+                    character.SkillList.First(s => s.Id == skillId).Level += request.Count;
+            }
 
             NotifyCharacterDataList notifyCharacterData = new();
             notifyCharacterData.CharacterDataList.AddRange(session.character.Characters.Where(x => upgradeResult.AffectedCharacters.Contains(x.Id)));
@@ -737,61 +804,64 @@ namespace AscNet.GameServer.Handlers
 
             EnhanceSkillGroupTable? enhanceSkillGroup = TableReaderV2.Parse<EnhanceSkillGroupTable>()
                 .SingleOrDefault(x => x.Id == request.SkillGroupId);
-            int[] affectedCharacterIds = TableReaderV2.Parse<EnhanceSkillTable>()
+            int ownerCharacterId = TableReaderV2.Parse<EnhanceSkillTable>()
                 .Where(x => x.SkillGroupId.Contains(request.SkillGroupId))
                 .Select(x => x.CharacterId)
-                .ToArray();
-            int[] enhanceSkillIds = enhanceSkillGroup?.SkillId
+                .FirstOrDefault();
+            List<int> enhanceSkillIds = enhanceSkillGroup?.SkillId
                 .Where(skillId => skillId > 0)
                 .Distinct()
-                .ToArray() ?? [];
-            Dictionary<int, EnhanceSkillUpgradeTable> unlockRows = TableReaderV2.Parse<EnhanceSkillUpgradeTable>()
-                .Where(x => enhanceSkillIds.Contains(x.SkillId) && x.Level == 0)
-                .ToDictionary(x => x.SkillId);
-            CharacterData[] affectedCharacters = session.character.Characters
-                .Where(character => affectedCharacterIds.Contains((int)character.Id))
-                .ToArray();
+                .ToList() ?? [];
+            int defaultSkillId = enhanceSkillIds.FirstOrDefault();
+            CharacterData? character = enhanceSkillGroup is not null && ownerCharacterId > 0
+                ? session.character.Characters.Find(candidate => candidate.Id == (uint)ownerCharacterId)
+                : null;
 
-            if (enhanceSkillIds.Length == 0
-                || unlockRows.Count != enhanceSkillIds.Length
-                || affectedCharacters.Length == 0)
+            if (character is null || defaultSkillId <= 0)
             {
                 // CharacterManagerGetCharacterDataNotFound. Never acknowledge an unlock that table data cannot fulfill.
                 session.SendResponse(new CharacterUnlockEnhanceSkillResponse() { Code = 20009021 }, packet.Id);
                 return;
             }
 
-            if (affectedCharacters.Any(character =>
-                enhanceSkillIds.Any(skillId => character.EnhanceSkillList.Any(skill => skill.Id == skillId))))
+            if (character.EnhanceSkillList.Any(skill => enhanceSkillIds.Contains((int)skill.Id)))
             {
                 // CharacterSkillUnlocked
                 session.SendResponse(new CharacterUnlockEnhanceSkillResponse() { Code = 20009047 }, packet.Id);
                 return;
             }
 
-            Dictionary<int, int> costs = [];
-            foreach (CharacterData character in affectedCharacters)
+            // Unlock exactly the table-defined default active skill (one active per enhance group).
+            List<EnhanceSkillUpgradeTable> defaultRows = Character.OrderedEnhanceSkillUpgrades(defaultSkillId);
+            if (defaultRows.Count == 0
+                || !Character.MeetsCharacterSkillCondition(character, defaultRows[0].ConditionId))
             {
-                foreach (int enhanceSkillId in enhanceSkillIds)
-                {
-                    character.EnhanceSkillList.Add(new CharacterSkill
-                    {
-                        Id = (uint)enhanceSkillId,
-                        Level = 1
-                    });
-                }
+                // CharacterSkillConditionNotMet
+                session.SendResponse(new CharacterUnlockEnhanceSkillResponse() { Code = 20009021 }, packet.Id);
+                return;
             }
-            foreach (int enhanceSkillId in enhanceSkillIds)
-                AccumulateEnhanceSkillCosts(costs, unlockRows[enhanceSkillId]);
+
+            Dictionary<int, int> costs = [];
+            AccumulateEnhanceSkillCosts(costs, defaultRows[0]);
+            if (!HasEnoughInventory(session, costs))
+            {
+                // ItemCountNotEnough
+                session.SendResponse(new CharacterUnlockEnhanceSkillResponse() { Code = 20012004 }, packet.Id);
+                return;
+            }
+
+            character.EnhanceSkillList.Add(new CharacterSkill
+            {
+                Id = (uint)defaultSkillId,
+                Level = 1
+            });
 
             NotifyItemDataList notifyItemData = new();
             foreach ((int itemId, int count) in costs)
                 notifyItemData.ItemDataList.Add(session.inventory.Do(itemId, -count));
-            NotifyCharacterDataList notifyCharacterData = new();
-            notifyCharacterData.CharacterDataList.AddRange(affectedCharacters);
 
             session.SendPush(notifyItemData);
-            session.SendPush(notifyCharacterData);
+            session.SendPush(new NotifyCharacterDataList { CharacterDataList = { character } });
 
             SaveCharacterProgress(session);
 
@@ -803,79 +873,167 @@ namespace AscNet.GameServer.Handlers
         {
             CharacterUpgradeEnhanceSkillRequest request = packet.Deserialize<CharacterUpgradeEnhanceSkillRequest>();
 
-            int[] enhanceSkillIds = TableReaderV2.Parse<EnhanceSkillGroupTable>()
-                .Where(x => x.Id == request.SkillGroupId)
-                .SelectMany(x => x.SkillId)
+            EnhanceSkillGroupTable? enhanceSkillGroup = TableReaderV2.Parse<EnhanceSkillGroupTable>()
+                .SingleOrDefault(x => x.Id == request.SkillGroupId);
+            int ownerCharacterId = TableReaderV2.Parse<EnhanceSkillTable>()
+                .Where(x => x.SkillGroupId.Contains(request.SkillGroupId))
+                .Select(x => x.CharacterId)
+                .FirstOrDefault();
+            List<int> enhanceSkillIds = enhanceSkillGroup?.SkillId
                 .Where(skillId => skillId > 0)
                 .Distinct()
-                .ToArray();
-            Dictionary<int, int> costs = [];
-            NotifyCharacterDataList notifyCharacterData = new();
-            foreach (CharacterData character in session.character.Characters)
+                .ToList() ?? [];
+            CharacterData? character = enhanceSkillGroup is not null && ownerCharacterId > 0
+                ? session.character.Characters.Find(candidate => candidate.Id == (uint)ownerCharacterId)
+                : null;
+
+            if (character is null || request.Count <= 0)
             {
-                bool changed = false;
-                foreach (int enhanceSkillId in enhanceSkillIds)
-                {
-                    CharacterSkill? skill = character.EnhanceSkillList.Find(x => x.Id == enhanceSkillId);
-                    if (skill is null)
-                        continue;
-
-                    for (int upgradeIndex = 0; upgradeIndex < request.Count; upgradeIndex++)
-                    {
-                        EnhanceSkillUpgradeTable? upgrade = TableReaderV2.Parse<EnhanceSkillUpgradeTable>()
-                            .Find(x => x.SkillId == enhanceSkillId && x.Level == skill.Level);
-                        if (upgrade is null)
-                            continue;
-
-                        skill.Level++;
-                        AccumulateEnhanceSkillCosts(costs, upgrade);
-                        changed = true;
-                    }
-                }
-
-                if (changed)
-                    notifyCharacterData.CharacterDataList.Add(character);
+                session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20012001 }, packet.Id);
+                return;
             }
+
+            // Upgrade the single active skill of this group.
+            CharacterSkill? activeSkill = character.EnhanceSkillList
+                .FirstOrDefault(skill => enhanceSkillIds.Contains((int)skill.Id));
+            if (activeSkill is null)
+            {
+                // CharacterSkillIsNotFoundOrLock
+                session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20009048 }, packet.Id);
+                return;
+            }
+
+            List<EnhanceSkillUpgradeTable> rows = Character.OrderedEnhanceSkillUpgrades((int)activeSkill.Id);
+            int targetLevel = activeSkill.Level + request.Count;
+            Dictionary<int, int> costs = [];
+            for (int level = activeSkill.Level; level < targetLevel; level++)
+            {
+                if (level >= rows.Count)
+                {
+                    // CharacterSkillMaxLevel
+                    session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20009014 }, packet.Id);
+                    return;
+                }
+                EnhanceSkillUpgradeTable upgrade = rows[level];
+                if (!HasEnhanceCost(upgrade))
+                {
+                    // CharacterSkillMaxLevel
+                    session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20009014 }, packet.Id);
+                    return;
+                }
+                if (!Character.MeetsCharacterSkillCondition(character, upgrade.ConditionId))
+                {
+                    // CharacterSkillConditionNotMet
+                    session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20009021 }, packet.Id);
+                    return;
+                }
+                AccumulateEnhanceSkillCosts(costs, upgrade);
+            }
+
+            if (!HasEnoughInventory(session, costs))
+            {
+                // ItemCountNotEnough
+                session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20012004 }, packet.Id);
+                return;
+            }
+
+            activeSkill.Level = targetLevel;
 
             NotifyItemDataList notifyItemData = new();
             foreach ((int itemId, int count) in costs)
                 notifyItemData.ItemDataList.Add(session.inventory.Do(itemId, -count));
+
             session.SendPush(notifyItemData);
-            session.SendPush(notifyCharacterData);
+            session.SendPush(new NotifyCharacterDataList { CharacterDataList = { character } });
 
             SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterUpgradeEnhanceSkillResponse(), packet.Id);
         }
 
+        [RequestPacketHandler("CharacterSwitchEnhanceSkillRequest")]
+        public static void CharacterSwitchEnhanceSkillRequestHandler(Session session, Packet.Request packet)
+        {
+            CharacterSwitchEnhanceSkillRequest request = packet.Deserialize<CharacterSwitchEnhanceSkillRequest>();
+            if (request.SkillId <= 0)
+            {
+                // CharacterSkillIsNotFoundOrLock
+                session.SendResponse(new CharacterSwitchEnhanceSkillResponse() { Code = 20009048 }, packet.Id);
+                return;
+            }
+
+            // The requested skill must be a configured alternate of an enhance group.
+            EnhanceSkillGroupTable? enhanceSkillGroup = TableReaderV2.Parse<EnhanceSkillGroupTable>()
+                .SingleOrDefault(x => x.SkillId.Contains(request.SkillId));
+            int ownerCharacterId = enhanceSkillGroup is not null
+                ? TableReaderV2.Parse<EnhanceSkillTable>()
+                    .Where(x => x.SkillGroupId.Contains(enhanceSkillGroup.Id))
+                    .Select(x => x.CharacterId)
+                    .FirstOrDefault()
+                : 0;
+            CharacterData? character = enhanceSkillGroup is not null && ownerCharacterId > 0
+                ? session.character.Characters.Find(candidate => candidate.Id == (uint)ownerCharacterId)
+                : null;
+            if (character is null)
+            {
+                // CharacterSkillIsNotFoundOrLock
+                session.SendResponse(new CharacterSwitchEnhanceSkillResponse() { Code = 20009048 }, packet.Id);
+                return;
+            }
+
+            // Switch only within the same owned/unlocked group, preserving the active skill level.
+            List<int> groupSkillIds = enhanceSkillGroup!.SkillId.Where(id => id > 0).Distinct().ToList();
+            CharacterSkill? activeSkill = character.EnhanceSkillList
+                .FirstOrDefault(skill => groupSkillIds.Contains((int)skill.Id));
+            if (activeSkill is null || !groupSkillIds.Contains(request.SkillId))
+            {
+                // CharacterSkillIsNotFoundOrLock
+                session.SendResponse(new CharacterSwitchEnhanceSkillResponse() { Code = 20009048 }, packet.Id);
+                return;
+            }
+
+            if (activeSkill.Id == (uint)request.SkillId)
+            {
+                // Idempotent: already the active skill of the group.
+                session.SendResponse(new CharacterSwitchEnhanceSkillResponse(), packet.Id);
+                return;
+            }
+
+            activeSkill.Id = (uint)request.SkillId;
+
+            session.SendPush(new NotifyCharacterDataList { CharacterDataList = { character } });
+            session.character.Save();
+
+            session.SendResponse(new CharacterSwitchEnhanceSkillResponse(), packet.Id);
+        }
+
         [RequestPacketHandler("CharacterEnhanceSkillNoticeRequest")]
         public static void CharacterEnhanceSkillNoticeRequestHandler(Session session, Packet.Request packet)
         {
             CharacterEnhanceSkillNoticeRequest request = packet.Deserialize<CharacterEnhanceSkillNoticeRequest>();
-            int characterId = request.TemplateId > 0 ? request.TemplateId
-                : request.CharacterId > 0 ? request.CharacterId
-                : request.Id;
+            int characterId = request.CharacterId;
 
-            IEnumerable<CharacterData> affectedCharacters = characterId > 0
-                ? session.character.Characters.Where(character => character.Id == characterId)
-                : session.character.Characters;
-
-            NotifyCharacterDataList notifyCharacterData = new();
-            foreach (CharacterData character in affectedCharacters)
+            // Capture-proven schema is a single owned CharacterId; reject unknown/unowned.
+            CharacterData? character = characterId > 0
+                ? session.character.Characters.Find(candidate => candidate.Id == (uint)characterId)
+                : null;
+            if (character is null)
             {
-                if (character.IsEnhanceSkillNotice)
-                    continue;
-
-                character.IsEnhanceSkillNotice = true;
-                notifyCharacterData.CharacterDataList.Add(character);
+                // CharacterManagerGetCharacterDataNotFound
+                session.SendResponse(new CharacterEnhanceSkillNoticeResponse { Code = 20009021 }, packet.Id);
+                return;
             }
 
-            if (notifyCharacterData.CharacterDataList.Count > 0)
+            if (character.IsEnhanceSkillNotice)
             {
-                session.SendPush(notifyCharacterData);
-                SaveCharacterProgress(session);
+                // Idempotent: already acknowledged, emit no push.
+                session.SendResponse(new CharacterEnhanceSkillNoticeResponse(), packet.Id);
+                return;
             }
 
+            character.IsEnhanceSkillNotice = true;
+            session.SendPush(new NotifyCharacterDataList { CharacterDataList = { character } });
+            SaveCharacterProgress(session);
             session.SendResponse(new CharacterEnhanceSkillNoticeResponse(), packet.Id);
         }
 
@@ -914,17 +1072,56 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
+            CharacterTable? characterRow = TableReaderV2.Parse<CharacterTable>()
+                .Find(candidate => candidate.Id == (int)character.Id);
+            if (characterRow is null || !IsValidCharacterHeadSelection(session, character, characterRow, requestedHead))
+            {
+                // CharacterHeadInvalid
+                session.SendResponse(new CharacterSetHeadInfoResponse { Code = 20012001 }, packet.Id);
+                return;
+            }
+
+            bool changed = character.CharacterHeadInfo is null
+                || character.CharacterHeadInfo.HeadFashionId != requestedHead.HeadFashionId
+                || character.CharacterHeadInfo.HeadFashionType != requestedHead.HeadFashionType;
             character.CharacterHeadInfo = new CharacterData.CharacterHead
             {
                 HeadFashionId = requestedHead.HeadFashionId,
                 HeadFashionType = requestedHead.HeadFashionType
             };
+            if (changed)
+                session.character.Save();
+
             session.SendPush(new NotifyCharacterDataList
             {
                 CharacterDataList = [character]
             });
-            session.character.Save();
             session.SendResponse(new CharacterSetHeadInfoResponse(), packet.Id);
+        }
+
+        /// <summary>
+        /// HeadFashionType: 0 Default (character default fashion), 1 Liberation (default fashion + Higher
+        /// liberation), 2 Fashion (an unlocked owned fashion of the same character). Mirrors
+        /// XFashionManager.IsFashionHeadUnLock. The alternate-color target is presentation-only and is
+        /// not an owned FashionList row, so it can never satisfy the Fashion head type.
+        /// </summary>
+        private static bool IsValidCharacterHeadSelection(Session session, CharacterData character, CharacterTable characterRow, CharacterData.CharacterHead head)
+        {
+            if (head.HeadFashionType is < 0 or > 2 || head.HeadFashionId <= 0)
+                return false;
+
+            if (head.HeadFashionType == 0)
+                return head.HeadFashionId == characterRow.DefaultNpcFashtionId;
+            if (head.HeadFashionType == 1)
+                return head.HeadFashionId == characterRow.DefaultNpcFashtionId
+                    && character.LiberateLv >= 4;
+
+            FashionTable? fashionRow = TableReaderV2.Parse<FashionTable>()
+                .Find(candidate => candidate.Id == head.HeadFashionId);
+            return fashionRow is not null
+                && fashionRow.CharacterId == character.Id
+                && session.character.Fashions.Any(candidate =>
+                    candidate.Id == head.HeadFashionId && !candidate.IsLock);
         }
 
         [RequestPacketHandler("CharacterExchangeRequest")]

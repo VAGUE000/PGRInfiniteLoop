@@ -24,6 +24,7 @@ using AscNet.Table.V2.client.activitybrief;
 using AscNet.Table.V2.client.uimain;
 using AscNet.Table.V2.share.fuben.teaching;
 using AscNet.Table.V2.share.newactivitycalendar;
+using AscNet.Table.V2.share.photomode;
 using MessagePack;
 using System.Diagnostics;
 
@@ -486,16 +487,59 @@ namespace AscNet.GameServer.Handlers
             // Retail clients send ReconnectAck as a client push; the push path logs it.
         }
 
-        // TODO: Promo code
-        [RequestPacketHandler("UseCdKeyRequest")]
-        public static void UseCdKeyRequestHandler(Session session, Packet.Request packet)
+        [RequestPacketHandler("FinishBriefStoryRequest")]
+        public static void FinishBriefStoryRequestHandler(Session session, Packet.Request packet)
         {
-            session.SendResponse(new UseCdKeyResponse() { Code = 20054001 }, packet.Id);
+            FinishBriefStoryRequest request = MessagePackSerializer.Deserialize<FinishBriefStoryRequest>(packet.Content);
+            FinishBriefStoryResponse response = new()
+            {
+                Code = 0
+            };
+
+            if (IsValidBriefStoryId(request.Id))
+                session.player.AddFinishedBriefStoryId(request.Id);
+
+            session.SendResponse(response, packet.Id);
+        }
+
+        private static bool IsValidBriefStoryId(int storyId)
+        {
+            return storyId > 0
+                && TableReaderV2.Parse<AscNet.Table.V2.share.activitybrief.ActivityBriefStoryTable>()
+                    .Any(story => story.Id == storyId);
+        }
+
+        internal static NotifyBriefStoryData BuildNotifyBriefStoryData(Player player)
+        {
+            return new()
+            {
+                FinishedIds = player.BriefStoryFinishedIds.Distinct().OrderBy(id => id).Cast<dynamic>().ToList()
+            };
         }
         
         internal static void SendLoginState(Session session)
         {
             session.SendPush(BuildNotifyLogin(session));
+        }
+
+        private static TimeLimitCtrlConfigList MakeTimeLimitControl(long id, long startTime, long endTime)
+        {
+            return new()
+            {
+                Id = id,
+                StartTime = startTime,
+                EndTime = endTime,
+                StartTimeStr = FormatTimeLimitBound(startTime),
+                EndTimeStr = FormatTimeLimitBound(endTime)
+            };
+        }
+
+        /// <summary>Deterministic UTC display string ("yyyy/M/d H:mm"); null when the bound is unbounded (0).</summary>
+        private static string? FormatTimeLimitBound(long unixSeconds)
+        {
+            if (unixSeconds == 0)
+                return null;
+            return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToUniversalTime().ToString("yyyy/M/d H:mm");
         }
 
         private static List<TimeLimitCtrlConfigList> BuildTimeLimitControlConfigList() =>
@@ -507,27 +551,21 @@ namespace AscNet.GameServer.Handlers
         {
             Dictionary<long, TimeLimitCtrlConfigList> controls = ActivityScheduleService.All.ToDictionary(
                 row => row.Id,
-                row => new TimeLimitCtrlConfigList
-                {
-                    Id = row.Id,
-                    StartTime = row.StartTime,
-                    EndTime = row.EndTime
-                });
+                row => MakeTimeLimitControl(row.Id, row.StartTime, row.EndTime));
             foreach (var anchor in TransfiniteModule.GetAnchoredActivities())
             {
-                controls[anchor.Schedule.Id] = new()
-                {
-                    Id = anchor.Schedule.Id,
-                    StartTime = anchor.Schedule.StartTime,
-                    EndTime = anchor.EndTime == long.MaxValue ? 0 : anchor.EndTime
-                };
+                controls[anchor.Schedule.Id] = MakeTimeLimitControl(
+                    anchor.Schedule.Id,
+                    anchor.Schedule.StartTime,
+                    anchor.EndTime == long.MaxValue ? 0 : anchor.EndTime);
             }
 
             void AddDerived(long id, long startTime, long endTime)
             {
                 if (id > 0)
-                    controls.TryAdd(id, new() { Id = id, StartTime = startTime, EndTime = endTime });
+                    controls.TryAdd(id, MakeTimeLimitControl(id, startTime, endTime));
             }
+
 
             Dictionary<int, ActivityBriefGroupTable> groups = TableReaderV2.Parse<ActivityBriefGroupTable>()
                 .ToDictionary(group => group.Id);
@@ -587,7 +625,7 @@ namespace AscNet.GameServer.Handlers
             foreach (SignInTable signIn in TableReaderV2.Parse<SignInTable>()
                 .Where(signIn => signIn.Type == 1 && signIn.TimeId is > 0))
             {
-                AddDerived(signIn.TimeId, 0, 0);
+                AddDerived(signIn.TimeId.Value, 0, 0);
             }
 
             if (wheelchairActivityActive)
@@ -714,8 +752,8 @@ namespace AscNet.GameServer.Handlers
                 FunctionOpenTimeConfigList = BuildFunctionOpenTimeConfigList(timeLimitControls),
                 DlcPlayerData = new(),
                 DlcCharacterList = session.character.Characters.Select(ToDlcCharacter).ToList(),
-                AssignChapterRecord = AssignModule.BuildLoginChapterRecords(session),
-                RedPointRecords = session.player.RedPointRecords ?? new()
+                RedPointRecords = session.player.RedPointRecords ?? new(),
+                AudioPlayerLoginData = AudioPlayerModule.BuildLoginData(session.player)
             };
             if (notifyLogin.PlayerData.DisplayCharIdList.Count < 1)
                 notifyLogin.PlayerData.DisplayCharIdList.Add(notifyLogin.PlayerData.DisplayCharId);
@@ -769,12 +807,13 @@ namespace AscNet.GameServer.Handlers
 
         private static List<int> BuildHaveBackgroundIds(Player player)
         {
-            HashSet<int> backgroundIds = new()
-            {
-                14000001,
-                14000004,
-                14000008
-            };
+            HashSet<int> backgroundIds = TableReaderV2.Parse<BackgroundTable>()
+                .Where(background => background.Id > 0 && background.IsFree > 0)
+                .Select(background => background.Id)
+                .ToHashSet();
+
+            if (player.OwnedBackgroundIds is not null)
+                backgroundIds.UnionWith(player.OwnedBackgroundIds);
 
             if (player.UseBackgroundId > 0)
                 backgroundIds.Add(player.UseBackgroundId);
@@ -1028,6 +1067,20 @@ namespace AscNet.GameServer.Handlers
         }
 
 
+        /// <summary>
+        /// True when the player's last recorded activity fell on an earlier 05:00-UTC business day
+        /// than the current login, i.e. a business-day rollover occurred since the prior login.
+        /// </summary>
+        private static bool IsNewBusinessDay(long previousLastLoginTime, long currentTime)
+        {
+            if (previousLastLoginTime <= 0)
+                return false;
+            const long fiveAmUtcOffset = 5 * 3600;
+            long previousBusinessDay = (previousLastLoginTime - fiveAmUtcOffset) / 86_400;
+            long currentBusinessDay = (currentTime - fiveAmUtcOffset) / 86_400;
+            return currentBusinessDay > previousBusinessDay;
+        }
+
         private static uint NextDailyRefreshTime()
         {
             return (uint)DateTimeOffset.Now.ToUnixTimeSeconds() + 3600 * 24;
@@ -1219,10 +1272,10 @@ namespace AscNet.GameServer.Handlers
             }
         }
 
-
         static void DoLogin(Session session, bool updateLoginAccounting)
         {
             long currentTime = DateTimeOffset.Now.ToUnixTimeSeconds();
+            long previousLastLoginTime = session.player.PlayerData.LastLoginTime;
             if (updateLoginAccounting)
             {
                 bool isNewDay = currentTime / 86_400 > session.player.PlayerData.LastLoginTime / 86_400;
@@ -1242,13 +1295,15 @@ namespace AscNet.GameServer.Handlers
             session.player.NormalizeTeamPrefabs();
             session.ClampPlayerLevelToConfiguredMaximum();
             Theatre6Module.ReconcileAvailability(session.player, DateTimeOffset.UtcNow);
-
             (ActivityResultNotify? arenaResult, NotifyArenaActivity arenaActivity) = ArenaModule.ReconcileLogin(session);
 
-            if (Common.Common.config.SkipCommonGuides)
-                GuideModule.SkipCommonGuides(session.player);
+
+            // Reconcile before NotifyLogin so repaired equipped head ids are present in the login
+            // payload; the returned timeout state is pushed AFTER NotifyLogin (retail order).
+            NotifyHeadTimeout? headTimeout = PlayerModule.ReconcileHeadTimeouts(session, DateTimeOffset.UtcNow);
 
             NotifyLogin notifyLogin = BuildNotifyLogin(session);
+
 
             NotifyAssistData notifyAssistData = new()
             {
@@ -1301,8 +1356,9 @@ namespace AscNet.GameServer.Handlers
             NotifyFunctionalEntranceData notifyFunctionalEntranceData = BuildFunctionalEntranceData();
             PurchaseDailyNotify purchaseDailyNotify = BuildPurchaseDailyNotify();
             NotifyPurchaseRecommendConfig purchaseRecommendConfig = BuildPurchaseRecommendConfig();
-
             session.SendPush(notifyLogin);
+            if (headTimeout is not null)
+                session.SendPush(headTimeout);
             session.SendPush(notifyPayInfo);
             session.SendPush(notifyMails);
             session.SendPush(new NotifyEquipChipGroupList
@@ -1321,6 +1377,8 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(notifyTaskData);
             session.SendPush(TaskModule.BuildActivenessStatus(session));
             session.SendPush(notifyNewPlayerTaskStatus);
+            if (IsNewBusinessDay(previousLastLoginTime, currentTime))
+                SignInModule.SendSignInResetPush(session, DateTimeOffset.UtcNow);
             TaskModule.SendTaskSync(session);
             session.SendPush(BuildRegressionLoginData());
             session.SendPush(new NotifyAllRedEnvelope());
@@ -1373,16 +1431,15 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(new NotifyPrequelChallengeRefreshTime() { NextRefreshTime = NextDailyRefreshTime() });
             session.SendPush(new NotifyDailyFubenLoginData() { RefreshTime = NextDailyRefreshTime() });
             session.SendPush(notifyBirthdayPlot);
-            SendEmptyStartupPush(session, "NotifyBoardEffectData");
-            SendEmptyStartupPush(session, "NotifyBountyChallengeData");
             SendEmptyStartupPush(session, "NotifyBountyChallengeMonsterDifficultyState");
-            session.SendPush(new NotifyBriefStoryData());
+            session.SendPush(BuildNotifyBriefStoryData(session.player));
             SendEmptyStartupPush(session, "NotifyCerberusGameData");
             SendEmptyStartupPush(session, "NotifyLoginCharacterTowerData");
             SendEmptyStartupPush(session, "NotifyClickClearData");
             SendEmptyStartupPush(session, "NotifyClientVersion");
             SendEmptyStartupPush(session, "NotifyColorTableActivityData");
             SendEmptyStartupPush(session, "NotifyCommunityData");
+            Version47EventModule.SendLoginPushes(session, DateTimeOffset.UtcNow);
             SendEmptyStartupPush(session, "NotifyCoupletData");
             SendEmptyStartupPush(session, "NotifyCourseData");
             SendEmptyStartupPush(session, "NotifyDoomsdayDbChange");

@@ -1,4 +1,4 @@
-﻿using AscNet.Common;
+using AscNet.Common;
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
@@ -14,6 +14,7 @@ using AscNet.Table.V2.share.fuben.mainline2;
 using AscNet.Table.V2.share.item;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.robot;
+using AscNet.GameServer.Game;
 using MessagePack;
 
 namespace AscNet.GameServer.Handlers
@@ -470,6 +471,19 @@ namespace AscNet.GameServer.Handlers
                     MonsterLevel = levelControl?.MonsterLevel ?? new()
                 }
             };
+
+            // Central table-derived ordinary event-stage availability gate: a stage that maps
+            // to an activity TimeId via the fuben/miniactivity tables must be inside its
+            // authoritative schedule window before a session fight may be created. Module-gated
+            // stages (transfinite, fashion, boss, arena, etc.) are absent from the ordinary
+            // index and remain governed by their own PreFight gates below.
+            if (ActivityScheduleService.StageTimeId((int)req.PreFightData.StageId) is int stageTimeId
+                && !ActivityScheduleService.IsOpen(stageTimeId, DateTimeOffset.UtcNow))
+            {
+                rsp.Code = FashionStoryModule.StageLocked; // FubenManagerStageLocked
+                session.SendResponse(rsp, packet.Id);
+                return;
+            }
 
             if (TransfiniteModule.ApplyPreFight(session, req.PreFightData, out int transfiniteCode))
             {

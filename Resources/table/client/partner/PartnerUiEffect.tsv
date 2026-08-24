@@ -126,3 +126,5 @@ Id	PartnerId	ModelType	EffectType	EffectRootName	EffectPath
 128	16400000	CombatModel	ControlByAnimationEvent	LampsBone08	Assets/Product/Effect/Prefab/FxPet3ChandelieronPrefab/Common/FxPet3ChandelieronUiStand01.prefab
 129	16400000	CombatModel	ControlByAnimationEvent	LampsBone10	Assets/Product/Effect/Prefab/FxPet3ChandelieronPrefab/Common/FxPet3ChandelieronUiStand02.prefab
 130	16400000	CombatModel	ControlByAnimationEvent	LampsBone12	Assets/Product/Effect/Prefab/FxPet3ChandelieronPrefab/Common/FxPet3ChandelieronUiStand03.prefab
+131	16410000	StandbyModel	Disappear	StarsBone00	Assets/Product/Effect/Prefab/FxPet3StarfishonPrefab/FxPet3StarfishonTrail.prefab
+132	16410000	CombatModel	Appear	HitCase	Assets/Product/Effect/Prefab/FxPet3StarfishonPrefab/FxPet3StarfishonBone13.prefab

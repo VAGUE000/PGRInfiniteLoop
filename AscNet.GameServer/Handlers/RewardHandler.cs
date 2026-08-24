@@ -1,4 +1,4 @@
-﻿using AscNet.Common;
+using AscNet.Common;
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
@@ -38,6 +38,7 @@ namespace AscNet.GameServer.Handlers
         internal FashionSyncNotify FashionData { get; } = new();
         internal NotifyCharacterDataList CharacterData { get; } = new();
         internal NotifyItemDataList ItemData { get; } = new();
+        internal NotifyPartnerDataList PartnerData { get; } = new();
         internal NotifyWeaponFashionInfo WeaponFashionData { get; } = new();
         internal NotifyHeadPortraitInfos HeadPortraitData { get; } = new();
         internal bool DormFurnitureChanged { get; set; }
@@ -56,6 +57,8 @@ namespace AscNet.GameServer.Handlers
                 session.SendPush(WeaponFashionData);
             if (CharacterData.CharacterDataList.Count > 0)
                 session.SendPush(CharacterData);
+            if (PartnerData.PartnerDataList.Count > 0)
+                session.SendPush(PartnerData);
             foreach (int id in GatherRewardIds)
                 session.SendPush(new NotifyGatherReward { Id = id });
             if (HeadPortraitData.Heads.Count > 0)
@@ -83,6 +86,8 @@ namespace AscNet.GameServer.Handlers
             WeaponFashionData.WeaponFashionDataList.AddRange(
                 source.WeaponFashionData.WeaponFashionDataList);
             CharacterData.CharacterDataList.AddRange(source.CharacterData.CharacterDataList);
+            PartnerData.PartnerDataList.AddRange(source.PartnerData.PartnerDataList);
+            PartnerData.OperateTypes.AddRange(source.PartnerData.OperateTypes);
             foreach (int id in source.GatherRewardIds)
             {
                 if (!GatherRewardIds.Contains(id))
@@ -824,6 +829,15 @@ namespace AscNet.GameServer.Handlers
                 case RewardType.Pokemon:
                     break;
                 case RewardType.Partner:
+                    if (!TableReaderV2.Parse<AscNet.Table.V2.share.partner.PartnerTable>().Any(row => row.Id == reward.Id))
+                        break;
+                    session.character.Partners ??= [];
+                    PartnerData acquiredPartner = PartnerModule.CreatePartner(
+                        PartnerModule.AllocatePartnerId(session.character),
+                        reward.Id);
+                    session.character.Partners.Add(acquiredPartner);
+                    result.PartnerData.PartnerDataList.Add(acquiredPartner);
+                    result.PartnerData.OperateTypes.Add(1);
                     break;
                 case RewardType.Nameplate:
                     break;

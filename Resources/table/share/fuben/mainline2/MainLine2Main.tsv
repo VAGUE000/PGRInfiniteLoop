@@ -22,3 +22,4 @@ Id	Title	Name	NameFontSize	Icon	StoryType	GroupId	OrderId	ChapterIds[1]	ChapterI
 2015	ER15	The Dying Sun		Assets/Product/Texture/Image/UiFubenMainTabChapter/InstanceIconPicER15.png	2		16	2015				21						201501	Assets/Product/Texture/Image/BgStory/Bgstory460.jpg	770400	
 1041	41	Homecoming Voyage		Assets/Product/Texture/Image/UiFubenMainTabChapter/InstanceIconPic41.png	1	9	41	1041				22						104101	Assets/Product/Texture/Image/BgStory/Bgstory460.jpg	770400	
 2016	ER16	Of Solitude and Stillness		Assets/Product/Texture/Image/UiFubenMainTabChapter/InstanceIconPicER16.png	2		17	2016				23						201601	Assets/Product/Texture/Image/BgStory/Bgstory460.jpg	770400	
+1042	42	Steering By Light		Assets/Product/Texture/Image/UiFubenMainTabChapter/InstanceIconPic42.png	1	10	42	1042	1142	1242		24						104201	Assets/Product/Texture/Image/BgStory/Bgstory460.jpg	770400	

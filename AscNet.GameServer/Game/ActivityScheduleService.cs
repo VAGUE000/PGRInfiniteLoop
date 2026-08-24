@@ -1,5 +1,6 @@
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.activity;
+using AscNet.Table.V2.share.miniactivity.dyemerge;
 
 namespace AscNet.GameServer.Game;
 
@@ -31,5 +32,35 @@ public static class ActivityScheduleService
     {
         entry = Entries.Value.FirstOrDefault(row => row.Id == timeId);
         return entry.Id != 0;
+    }
+
+    /// <summary>
+    /// Maps an ordinary event stage back to its activity TimeId from the fuben/miniactivity
+    /// tables that enumerate stages alongside a TimeId and are not otherwise gated by a
+    /// PreFight module. Stages absent from the index (permanent mainline, normal stages,
+    /// module-gated event stages) return null and are left to their own gates.
+    /// </summary>
+    private static readonly Lazy<Dictionary<int, int>> StageTimeIds = new(BuildStageTimeIds);
+
+    public static int? StageTimeId(int stageId) =>
+        StageTimeIds.Value.TryGetValue(stageId, out int timeId) ? timeId : null;
+
+    private static Dictionary<int, int> BuildStageTimeIds()
+    {
+        Dictionary<int, int> stageToTimeId = new();
+
+        void AddStage(int stageId, int? timeId)
+        {
+            if (stageId > 0 && timeId is > 0)
+                stageToTimeId.TryAdd(stageId, timeId.Value);
+        }
+
+
+        foreach (DyeMergeChapterTable chapter in TableReaderV2.Parse<DyeMergeChapterTable>())
+            foreach (int stageId in chapter.StageIds)
+                AddStage(stageId, chapter.TimeId);
+
+
+        return stageToTimeId;
     }
 }
