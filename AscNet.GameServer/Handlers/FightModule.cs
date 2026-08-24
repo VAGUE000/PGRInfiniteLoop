@@ -493,6 +493,14 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
+            if (SimulateTrainModule.TryApplyPreFight(req.PreFightData, rsp.FightData, out int simulateTrainCode)
+                && simulateTrainCode != 0)
+            {
+                rsp.Code = simulateTrainCode;
+                session.SendResponse(rsp, packet.Id);
+                return;
+            }
+
             if (TransfiniteModule.ApplyPreFight(session, req.PreFightData, out int transfiniteCode))
             {
                 rsp.Code = transfiniteCode;
@@ -2515,6 +2523,10 @@ namespace AscNet.GameServer.Handlers
                 TaskModule.RecordArenaResult(session, arenaResult.Point);
             }
 
+            NotifyArchiveMonsterRecord? simulateTrainArchiveRecord = SimulateTrainModule.RecordArchiveKill(
+                session.player,
+                session.fight?.PreFight.PreFightData,
+                req.Result);
             bool updatedRepeatChallenge = RepeatChallengeModule.RecordStageClear(session.player, req.Result.StageId, challengeCount);
             if (MainLineChapterIdsByStageId.Value.TryGetValue(responseStageId, out int mainLineChapterId))
             {
@@ -2554,11 +2566,16 @@ namespace AscNet.GameServer.Handlers
                     MultiRewardGoodsList = multiRewards,
                     ChallengeCount = isQuickClear ? 0 : challengeCount,
                     ArenaResult = arenaResult,
+                    SimulateTrainFightResult = SimulateTrainModule.BuildFightResult(
+                        session.fight?.PreFight.PreFightData,
+                        req.Result),
                 }
             };
 
             session.fight = null;
             session.SendPush(new NotifyStageData() { StageList = new() { stageData } });
+            if (simulateTrainArchiveRecord is not null)
+                session.SendPush(simulateTrainArchiveRecord);
             StudyProgressModule.SendTeachingStageUpdate(session, stageData);
             bool sentTheatreProgress = BiancaTheatreModule.TrySendTheatreFightClearProgress(session, req.Result.StageId);
             if (!sentTheatreProgress)

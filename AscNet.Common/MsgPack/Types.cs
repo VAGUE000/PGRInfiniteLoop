@@ -3087,6 +3087,17 @@ namespace AscNet.Common.MsgPack
         [global::MessagePack.MessagePackObject(true)]
         public class PreFightRequestPreFightData
         {
+            [global::MessagePack.MessagePackObject(true)]
+            public class SimulateTrainInfoData
+            {
+                public Int32 BossId { get; set; }
+                public Int32 Period { get; set; }
+                public Int32 AtkLevel { get; set; }
+                public Int32 HpLevel { get; set; }
+                public Int32 Difficulty { get; set; }
+                public Int32 DangerCoefficient { get; set; }
+            }
+
             public Int32 ChallengeCount { get; set; }
             public UInt32 StageId { get; set; }
             public Int32 ArenaSelectIndex { get; set; }
@@ -3104,6 +3115,7 @@ namespace AscNet.Common.MsgPack
             public Int32 BossSingleStageType { get; set; }
             public dynamic? BossSingleChallengeBuffGroup { get; set; }
             public Int32? BossInshotTowerId { get; set; }
+            public SimulateTrainInfoData? SimulateTrainInfo { get; set; }
         }
 
         public PreFightRequestPreFightData PreFightData { get; set; }
@@ -3129,7 +3141,7 @@ namespace AscNet.Common.MsgPack
             public Int32 FightCheckType { get; set; }
             public Int32 SegmentFightCheckSecond { get; set; }
             public Int32 StarsMark { get; set; }
-            public List<Int32> MonsterLevel { get; set; } = new();
+            public List<Int32>? MonsterLevel { get; set; } = new();
             public List<dynamic> EventIds { get; set; } = new();
             public dynamic? FightEventsWithLevel { get; set; }
             public List<dynamic> NormalEventIds { get; set; } = new();
