@@ -17,7 +17,6 @@ def load(loader):
         r".*events\.appsflyer\.com.*",
         r"pgr\.kurogame\.net:443",
     ]
-    
 
 
 def _normalise_connect_host(host):
@@ -96,8 +95,45 @@ def _is_wildcard_ascnet_request(flow):
     return _is_local_wildcard_host(flow.request.pretty_host) and path.startswith(("/api/", "/prod/", "/sdkcom/"))
 
 
+def _is_tw_config_request(flow):
+    host = flow.request.pretty_host
+    path = flow.request.path.split("?", 1)[0]
+    return (
+        host.startswith("prod-twcdn-")
+        and host.endswith(".kurogame.net")
+        and path.startswith("/prod/client/config/")
+        and path.endswith("/standalone/config.tab")
+    )
 
 
+def _ascnet_origin():
+    scheme, host, port = _ascnet_target()
+    if port in (80, 443):
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
+def _rewrite_login_url(value, target_origin):
+    # ServerListStr/ChannelServerListStr are `label#url` / `default#label#url`.
+    # Keep labels and metadata, replace only the final URL's origin with the
+    # local AscNet target while preserving its path.
+    head, sep, url = value.rpartition("#")
+    parsed = urlparse(url)
+    if not (sep and parsed.scheme and parsed.hostname):
+        return value
+    suffix = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return head + sep + target_origin + suffix
+
+
+def _rewrite_tw_config_body(body, target_origin):
+    lines = body.split("\n")
+    out = []
+    for line in lines:
+        cols = line.split("\t")
+        if len(cols) >= 3 and cols[0] in {"ServerListStr", "ChannelServerListStr"}:
+            cols[2] = _rewrite_login_url(cols[2], target_origin)
+        out.append("\t".join(cols))
+    return "\n".join(out)
 
 
 def next_layer(nextlayer: layer.NextLayer):
@@ -136,6 +172,14 @@ def request(flow: http.HTTPFlow) -> None:
         _log_flow("PASS", flow)
         return
 
+    # TW config carries authoritative upstream metadata (doc/launch version,
+    # channel, CDN list) that local AscNet does not reproduce. Let it pass
+    # through to the real CDN unchanged; response() rewrites only the login
+    # endpoints to the local target.
+    if _is_tw_config_request(flow):
+        _log_flow("PASS", flow)
+        return
+
     if not (_is_ascnet_host(flow.request.pretty_host) or _is_ascnet_gate_request(flow) or _is_wildcard_ascnet_request(flow)):
         return
 
@@ -151,6 +195,21 @@ def request(flow: http.HTTPFlow) -> None:
     flow.request.headers["X-Forwarded-Proto"] = original_scheme
 
 
-
 def response(flow: http.HTTPFlow) -> None:
     _log_flow("RSP", flow)
+
+    # TW config was passed through upstream unchanged. Rewrite only the login
+    # endpoint URLs to the local target so the client reaches local AscNet,
+    # keeping all authoritative metadata (version, channel, CDNs, labels).
+    if not _is_tw_config_request(flow) or flow.response is None:
+        return
+
+    body = flow.response.content
+    if not body:
+        return
+
+    text = body.decode("utf-8", errors="replace")
+    rewritten = _rewrite_tw_config_body(text, _ascnet_origin())
+    if rewritten != text:
+        flow.response.content = rewritten.encode("utf-8")
+        _log_flow("TW-CONFIG-REWRITE", flow)

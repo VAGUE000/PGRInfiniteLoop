@@ -62,7 +62,7 @@ class ProxyRoutingTests(unittest.TestCase):
         self.assertEqual(9, flow.request.port)
         self.assertEqual("prod-encdn-tx.kurogame.net", flow.request.headers["X-Forwarded-Host"])
 
-    def test_tw_config_routes_to_ascnet(self):
+    def test_tw_config_passes_through_upstream(self):
         flow = self.flow(
             "/prod/client/config/PQQdKhfClWoBi3Iq/com.kurogame.punishing.grayraven.tw/4.5.0/standalone/config.tab",
             "prod-twcdn-tx.kurogame.net",
@@ -71,9 +71,37 @@ class ProxyRoutingTests(unittest.TestCase):
         with patch.dict(os.environ, {"ASCNET_PROXY_TARGET": "http://127.0.0.1:9"}, clear=False):
             proxy.request(flow)
 
-        self.assertEqual("127.0.0.1", flow.request.host)
-        self.assertEqual(9, flow.request.port)
-        self.assertEqual("prod-twcdn-tx.kurogame.net", flow.request.headers["X-Forwarded-Host"])
+        self.assertEqual("prod-twcdn-tx.kurogame.net", flow.request.host)
+        self.assertEqual(80, flow.request.port)
+        self.assertNotIn("X-Forwarded-Host", flow.request.headers)
+
+    def test_tw_config_response_rewrites_login_endpoints_only(self):
+        flow = self.flow(
+            "/prod/client/config/Pxk4VQxGusWDqGN5/com.kurogame.punishing.grayraven.tw/4.7.0/standalone/config.tab",
+            "prod-twcdn-tx.kurogame.net",
+        )
+        flow.response = SimpleNamespace(
+            status_code=200,
+            content=(
+                "Key\tType\tValue\n"
+                "ApplicationVersion\tstring\t4.7.0\n"
+                "DocumentVersion\tstring\t4.7.12\n"
+                "Channel\tint\t5\n"
+                "PrimaryCdns\tstring\thttp://prod-twcdn-ak.pgr-game.com/prod\n"
+                "ServerListStr\tstring\t繁體中文服#http://175.97.184.50:55556/api/Login/Login\n"
+                "ChannelServerListStr\tstring\tdefault#繁體中文服#http://175.97.184.50:55556/api/Login/Login\n"
+            ).encode("utf-8"),
+        )
+
+        with patch.dict(os.environ, {"ASCNET_PROXY_TARGET": "http://127.0.0.1:8080"}, clear=False):
+            proxy.response(flow)
+
+        text = flow.response.content.decode("utf-8")
+        self.assertIn("ServerListStr\tstring\t繁體中文服#http://127.0.0.1:8080/api/Login/Login\n", text)
+        self.assertIn("ChannelServerListStr\tstring\tdefault#繁體中文服#http://127.0.0.1:8080/api/Login/Login\n", text)
+        self.assertIn("DocumentVersion\tstring\t4.7.12\n", text)
+        self.assertIn("Channel\tint\t5\n", text)
+        self.assertIn("PrimaryCdns\tstring\thttp://prod-twcdn-ak.pgr-game.com/prod\n", text)
 
     def test_tw_feedback_with_query_is_sunk(self):
         flow = self.flow("/feedback?event=login", "prod.twzspnslog.kurogame.com")
