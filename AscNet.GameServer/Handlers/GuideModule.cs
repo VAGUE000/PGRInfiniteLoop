@@ -3,7 +3,6 @@ using AscNet.Common.Database;
 using MessagePack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.guide;
-using AscNet.Table.V2.share.condition;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -49,18 +48,13 @@ namespace AscNet.GameServer.Handlers
             TableReaderV2.Parse<GuideGroupTable>().ToDictionary(guide => guide.Id));
         private static readonly Lazy<HashSet<int>> GuideCompletions = new(() =>
             TableReaderV2.Parse<GuideCompleteTable>().Select(completion => completion.Id).ToHashSet());
-        private static readonly Lazy<Dictionary<int, ConditionTable>> GuideConditions = new(() =>
-            TableReaderV2.Parse<ConditionTable>().ToDictionary(condition => condition.Id));
-        private const int IncompleteStageConditionType = 10108;
         [RequestPacketHandler("GuideOpenRequest")]
         public static void GuideOpenRequestHandler(Session session, Packet.Request packet)
         {
             GuideCompleteRequest request = packet.Deserialize<GuideCompleteRequest>();
-            bool valid = IsValidGuide(request.GuideGroupId);
-            session.OpenedGuideGroupId = valid ? request.GuideGroupId : null;
             session.SendResponse(new GuideOpenResponse
             {
-                Code = valid ? 0 : 1
+                Code = IsValidGuide(request.GuideGroupId) ? 0 : 1
             }, packet.Id);
         }
 
@@ -146,53 +140,25 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
-            GuideCompletionResult result = CompleteGuide(session, guide);
-            if (!result.Succeeded)
+            session.player.PlayerData.GuideData ??= new();
+            if (session.player.PlayerData.GuideData.Contains(request.GuideGroupId))
             {
-                session.SendResponse(new GuideCompleteResponse { Code = 1 }, packet.Id);
+                session.SendPush(new NotifyGuide { GuideGroupId = request.GuideGroupId });
+                session.SendResponse(new GuideCompleteResponse(), packet.Id);
                 return;
             }
-            if (result.WasAlreadyComplete)
-                session.SendPush(new NotifyGuide { GuideGroupId = request.GuideGroupId });
-            session.SendResponse(new GuideCompleteResponse
-            {
-                RewardGoodsList = result.RewardGoodsList
-            }, packet.Id);
-        }
 
-        internal static void OnStageSettled(Session session, IEnumerable<uint> settledStageIds)
-        {
-            if (session.OpenedGuideGroupId is not int openedGuideId
-                || !GuideGroups.Value.TryGetValue(openedGuideId, out GuideGroupTable? guide))
-                return;
-
-            HashSet<uint> settled = settledStageIds.ToHashSet();
-            bool stageReferenced = guide.ConditionId
-                .Where(GuideConditions.Value.ContainsKey)
-                .Select(id => GuideConditions.Value[id])
-                .Any(condition => condition.Type == IncompleteStageConditionType
-                    && condition.Params.Any(param => settled.Contains(unchecked((uint)param))));
-            if (!stageReferenced)
-                return;
-
-            if (CompleteGuide(session, guide).Succeeded)
-                session.OpenedGuideGroupId = null;
-        }
-
-        private static GuideCompletionResult CompleteGuide(Session session, GuideGroupTable guide)
-        {
-            session.player.PlayerData.GuideData ??= new();
-            if (session.player.PlayerData.GuideData.Contains(guide.Id))
-                return new GuideCompletionResult { Succeeded = true, WasAlreadyComplete = true };
-
-            string claimKey = $"guide:{guide.Id}";
+            string claimKey = $"guide:{request.GuideGroupId}";
 
             RewardApplicationResult? rewardApplication = null;
             if (guide.RewardId is > 0)
             {
                 var configuredRewards = RewardHandler.GetRewardGoods(guide.RewardId);
                 if (configuredRewards.Count == 0)
-                    return new GuideCompletionResult { Succeeded = false };
+                {
+                    session.SendResponse(new GuideCompleteResponse { Code = 1 }, packet.Id);
+                    return;
+                }
                 try
                 {
                     rewardApplication = RewardHandler.ApplyRewardsOnceAndPersist(
@@ -202,31 +168,34 @@ namespace AscNet.GameServer.Handlers
                 catch (Exception exception)
                 {
                     session.log.Error(
-                        $"Failed to persist guide reward {guide.Id}: {exception}");
-                    return new GuideCompletionResult { Succeeded = false };
+                        $"Failed to persist guide reward {request.GuideGroupId}: {exception}");
+                    session.SendResponse(new GuideCompleteResponse { Code = 1 }, packet.Id);
+                    return;
                 }
             }
 
-            session.player.PlayerData.GuideData.Add(guide.Id);
+            session.player.PlayerData.GuideData.Add(request.GuideGroupId);
             try
             {
                 session.player.SaveChecked();
             }
             catch (Exception exception)
             {
-                session.player.PlayerData.GuideData.Remove(guide.Id);
+                session.player.PlayerData.GuideData.Remove(request.GuideGroupId);
                 session.log.Error(
-                    $"Failed to persist guide completion {guide.Id}: {exception}");
-                return new GuideCompletionResult { Succeeded = false };
+                    $"Failed to persist guide completion {request.GuideGroupId}: {exception}");
+                session.SendResponse(new GuideCompleteResponse { Code = 1 }, packet.Id);
+                return;
             }
             rewardApplication?.SendPushes(session);
-            session.SendPush(new NotifyGuide { GuideGroupId = guide.Id });
-            return new GuideCompletionResult
+            session.SendPush(new NotifyGuide { GuideGroupId = request.GuideGroupId });
+            session.SendResponse(new GuideCompleteResponse
             {
-                Succeeded = true,
                 RewardGoodsList = rewardApplication?.RewardGoods
-            };
+            }, packet.Id);
         }
+
+
 
         internal static void SkipCommonGuides(Player player)
         {
@@ -244,10 +213,4 @@ namespace AscNet.GameServer.Handlers
                 && GuideCompletions.Value.Contains(guide.CompleteId);
     }
 
-    internal sealed class GuideCompletionResult
-    {
-        public bool Succeeded;
-        public bool WasAlreadyComplete;
-        public List<RewardGoods>? RewardGoodsList;
-    }
 }

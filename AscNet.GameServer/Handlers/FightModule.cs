@@ -11,6 +11,7 @@ using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.fuben;
 using AscNet.Table.V2.share.fashion;
 using AscNet.Table.V2.share.fuben.mainline2;
+using MainLineChapterTable = AscNet.Table.V2.share.fuben.mainline.ChapterTable;
 using AscNet.Table.V2.share.item;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.robot;
@@ -333,6 +334,13 @@ namespace AscNet.GameServer.Handlers
         private static readonly Lazy<HashSet<uint>> MainLine2AchievementStageIds = new(() => TableReaderV2.Parse<MainLine2StageTable>()
             .Select(stage => (uint)stage.Id)
             .ToHashSet());
+        private static readonly Lazy<IReadOnlyDictionary<uint, int>> MainLineChapterIdsByStageId = new(() =>
+            TableReaderV2.Parse<MainLineChapterTable>()
+                .SelectMany(chapter => chapter.StageId
+                    .Where(stageId => stageId > 0)
+                    .Select(stageId => (StageId: (uint)stageId, chapter.ChapterId)))
+                .ToDictionary(entry => entry.StageId, entry => entry.ChapterId));
+
 
         private static readonly Lazy<IReadOnlyDictionary<string, int>> TeamConfigValues = new(() =>
             TableReaderV2.Parse<TeamConfigTable>().ToDictionary(row => row.Key, row => row.Value));
@@ -2505,6 +2513,12 @@ namespace AscNet.GameServer.Handlers
             }
 
             bool updatedRepeatChallenge = RepeatChallengeModule.RecordStageClear(session.player, req.Result.StageId, challengeCount);
+            if (MainLineChapterIdsByStageId.Value.TryGetValue(responseStageId, out int mainLineChapterId))
+            {
+                session.player.FubenMainLineData ??= new();
+                session.player.FubenMainLineData.LastPassStage ??= new();
+                session.player.FubenMainLineData.LastPassStage[mainLineChapterId] = responseStageId;
+            }
             session.player.Save();
             session.inventory.Save();
             session.character.Save();
@@ -2551,8 +2565,6 @@ namespace AscNet.GameServer.Handlers
             if (updatedRepeatChallenge)
                 session.SendPush(RepeatChallengeModule.BuildExpChange(session.player));
             TaskModule.RecordStageClear(session, (int)req.Result.StageId, challengeCount);
-            if (isSuccessfulSettle)
-                GuideModule.OnStageSettled(session, [req.Result.StageId, responseStageId]);
             session.SendResponse(fightSettleResponse, packet.Id);
         }
 
