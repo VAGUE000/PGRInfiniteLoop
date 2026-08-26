@@ -27,20 +27,9 @@ internal partial class Program
             "SimulateTrain Ronin difficulty buffs");
         AssertEqual(201, ronin.TimeId, "SimulateTrain Ronin permanent TimeId");
         AssertEqual(0, ronin.ImpasseTimeId, "SimulateTrain Ronin ImpasseTimeId");
-        AssertEqual(true, ActivityScheduleService.IsOpen(ronin.TimeId, DateTimeOffset.UtcNow),
+        DateTimeOffset permanentPracticeAt = DateTimeOffset.UnixEpoch;
+        AssertEqual(true, ActivityScheduleService.IsOpen(ronin.TimeId, permanentPracticeAt),
             "SimulateTrain permanent practice schedule is open");
-        Dictionary<int, ActivityScheduleEntry> simulateTrainSchedules = [];
-        foreach (int timeId in bosses
-                     .SelectMany(boss => new[] { boss.TimeId, boss.ImpasseTimeId })
-                     .Where(timeId => timeId > 0)
-                     .Distinct())
-        {
-            AssertEqual(true, ActivityScheduleService.TryGet(timeId, out ActivityScheduleEntry schedule),
-                $"SimulateTrain TimeId {timeId} has an authoritative schedule");
-            simulateTrainSchedules[timeId] = schedule;
-        }
-        DateTimeOffset allSchedulesOpenAt = DateTimeOffset.FromUnixTimeSeconds(
-            simulateTrainSchedules.Values.Max(schedule => schedule.StartTime));
         List<SimulateTrainPeriodBuffTable> periodBuffs =
             TableReaderV2.Parse<SimulateTrainPeriodBuffTable>();
         AssertEqual(22, periodBuffs.Count, "SimulateTrain period buff row count");
@@ -79,7 +68,7 @@ internal partial class Program
                 typeof(int).MakeByRefType()
             ]);
         PreFightResponse.PreFightResponseFightData fightData = new() { StageId = request.PreFightData.StageId };
-        object?[] preFightArguments = [request.PreFightData, fightData, allSchedulesOpenAt, 0];
+        object?[] preFightArguments = [request.PreFightData, fightData, permanentPracticeAt, 0];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, preFightArguments) ?? false),
             "SimulateTrain pre-fight is recognized");
         AssertEqual(0, (int)(preFightArguments[3] ?? -1),
@@ -120,7 +109,7 @@ internal partial class Program
         PreFightResponse.PreFightResponseFightData officialCaptureFightData =
             new() { StageId = officialCaptureRequest.PreFightData.StageId };
         object?[] officialCaptureArguments =
-            [officialCaptureRequest.PreFightData, officialCaptureFightData, allSchedulesOpenAt, 0];
+            [officialCaptureRequest.PreFightData, officialCaptureFightData, permanentPracticeAt, 0];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, officialCaptureArguments) ?? false),
             "Official captured SimulateTrain pre-fight is recognized");
         AssertEqual(0, (int)(officialCaptureArguments[3] ?? -1),
@@ -153,7 +142,7 @@ internal partial class Program
         [
             request.PreFightData,
             new PreFightResponse.PreFightResponseFightData { StageId = request.PreFightData.StageId },
-            allSchedulesOpenAt,
+            permanentPracticeAt,
             0
         ];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, unsupportedPeriodArguments) ?? false),
@@ -224,16 +213,31 @@ internal partial class Program
 
         foreach (SimulateTrainMonsterTable boss in bosses)
         {
-            ActivityScheduleEntry baseSchedule = simulateTrainSchedules[boss.TimeId];
-            AssertScheduleWindow(boss, 1, "base", baseSchedule);
-            if (boss.ImpasseTimeId > 0)
+            if (!ActivityScheduleService.TryGet(boss.TimeId, out ActivityScheduleEntry baseSchedule))
             {
-                AssertScheduleWindow(
-                    boss,
-                    boss.NpcId.Count,
-                    "Impasse",
-                    baseSchedule,
-                    simulateTrainSchedules[boss.ImpasseTimeId]);
+                AssertEqual(20_003_024, PreFightCodeAt(boss, permanentPracticeAt),
+                    $"SimulateTrain boss {boss.Id} is unavailable without an authoritative base schedule");
+                if (boss.ImpasseTimeId > 0)
+                {
+                    AssertEqual(20_003_024, PreFightCodeAt(boss, permanentPracticeAt, boss.NpcId.Count),
+                        $"SimulateTrain boss {boss.Id} Impasse is unavailable without an authoritative base schedule");
+                }
+                continue;
+            }
+
+            AssertScheduleWindow(boss, 1, "base", baseSchedule);
+            if (boss.ImpasseTimeId <= 0)
+                continue;
+
+            if (ActivityScheduleService.TryGet(boss.ImpasseTimeId, out ActivityScheduleEntry impasseSchedule))
+            {
+                AssertScheduleWindow(boss, boss.NpcId.Count, "Impasse", baseSchedule, impasseSchedule);
+            }
+            else
+            {
+                DateTimeOffset baseOpenAt = DateTimeOffset.FromUnixTimeSeconds(baseSchedule.StartTime);
+                AssertEqual(20_003_024, PreFightCodeAt(boss, baseOpenAt, boss.NpcId.Count),
+                    $"SimulateTrain boss {boss.Id} Impasse is unavailable without an authoritative schedule");
             }
         }
 
@@ -242,7 +246,7 @@ internal partial class Program
         [
             request.PreFightData,
             new PreFightResponse.PreFightResponseFightData { StageId = request.PreFightData.StageId },
-            allSchedulesOpenAt,
+            permanentPracticeAt,
             0
         ];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, invalidPreFightArguments) ?? false),

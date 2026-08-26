@@ -3590,11 +3590,11 @@
     },
     {
       "columns": 4,
-      "contentSha256": "72289e51497cd1f223ac3f21136234aa216e143312233f89bf1f497428ea13af",
-      "filter": "official-notice-feature-window-version-history-regional-client-entry-retail-login-and-permanent-practice-derived",
+      "contentSha256": "6fd8955e66766b264a7c8fc3af331bb71dad5ea45960371eb9173f35a5ad53ef",
+      "filter": "official-notice-feature-window-version-history-regional-client-entry-and-permanent-practice-derived",
       "naturalKey": "Id",
       "path": "share/activity/ActivitySchedule.tsv",
-      "rows": 47,
+      "rows": 35,
       "source": [
         "share/activity/EventCatalog.tsv",
         "Resources/Configs/Notices/4.7.0/{GameNotice,LoginNotice}.json",
@@ -3607,7 +3607,6 @@
         "share/item/Item.json",
         "share/miniactivity/musicgame/concertpreheating/ConcertPreHeatingActivity.json",
         "share/signin/SignIn.json",
-        "retail NotifyLogin capture:0639@9301a037c5476c67b1d2792bfb6f2d62ffabbfaf",
         "SimulateTrain permanent practice:TimeId=201"
       ]
     }
