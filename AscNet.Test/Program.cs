@@ -18,6 +18,7 @@ using AscNet.Table.V2.share.chat;
 using AscNet.Table.V2.share.fuben.mainline;
 using AscNet.Table.V2.share.fuben.mainline2;
 using AscNet.Table.V2.share.task;
+using GuideConditionTable = AscNet.Table.V2.share.condition.ConditionTable;
 using AscNet.Table.V2.share.exhibition;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.character;
@@ -28674,6 +28675,154 @@ namespace AscNet.Test
                     "GuideComplete invalid response");
             AssertEqual(1, invalidGuideCompleteResponse.Code, "GuideComplete invalid response Code");
             AssertNoAvailablePacket(guideCompleteHarness, "GuideComplete invalid request");
+            ValidateGuideStageSettlementReconciliation();
+        }
+
+        private static void ValidateGuideStageSettlementReconciliation()
+        {
+            Dictionary<int, GuideConditionTable> conditions = TableReaderV2.Parse<GuideConditionTable>()
+                .ToDictionary(row => row.Id);
+            List<GuideGroupTable> guides = TableReaderV2.Parse<GuideGroupTable>().ToList();
+            HashSet<int> guideCompletionIds = TableReaderV2.Parse<GuideCompleteTable>()
+                .Select(completion => completion.Id)
+                .ToHashSet();
+            List<GuideGroupTable> stageTriggerGuides = guides
+                .Where(guide =>
+                    guideCompletionIds.Contains(guide.CompleteId)
+                    && guide.RewardId == 0
+                    && guide.ConditionId.Any(id =>
+                        conditions.TryGetValue(id, out GuideConditionTable? condition)
+                        && condition.Type == 10108
+                        && condition.Params.Count > 0
+                        && TableReaderV2.Parse<StageTable>().Any(stage => (uint)stage.StageId == (uint)condition.Params[0])))
+                .ToList();
+            if (stageTriggerGuides.Count < 2)
+                throw new InvalidDataException("Guide settlement reconciliation: expected at least two stage-triggered guides.");
+
+            int TriggerStage(GuideGroupTable guide) => guide.ConditionId
+                .Where(conditions.ContainsKey)
+                .Select(id => conditions[id])
+                .First(condition => condition.Type == 10108 && condition.Params.Count > 0).Params[0];
+
+            GuideGroupTable matchGuide = stageTriggerGuides[0];
+            int matchStage = TriggerStage(matchGuide);
+            GuideGroupTable otherGuide = stageTriggerGuides.First(guide =>
+                guide.Id != matchGuide.Id && TriggerStage(guide) != matchStage);
+            int otherStage = TriggerStage(otherGuide);
+
+            const long uid = 88_200;
+            using MongoCollectionOverride mongo =
+                MongoCollectionOverride.InstallForBossCompatibility(
+                    out RecordingMongoCollectionProxy<AscNet.Common.Database.Player> playerSaves,
+                    out _);
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(uid);
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(uid),
+                player,
+                CreateDrawCompatibilityInventory(uid, []),
+                "guide-settle-reconcile");
+            harness.Session.stage = CreateLoginAccountCompatibilityStage(uid);
+
+            // Matching guide opened, then its stage passed: completes once, persists, and stays in login GuideData.
+            InvokeRegisteredRequestHandler(
+                nameof(GuideOpenRequest),
+                harness.Session,
+                88_200,
+                new GuideCompleteRequest { GuideGroupId = matchGuide.Id });
+            ReadResponsePayload<AscNet.Common.MsgPack.GuideOpenResponse>(
+                harness,
+                88_200,
+                nameof(AscNet.Common.MsgPack.GuideOpenResponse),
+                "Guide settlement open");
+            AssertEqual(matchGuide.Id, harness.Session.OpenedGuideGroupId,
+                "Guide settlement open tracks opened guide");
+
+            long matchFightId = 88_201;
+            harness.Session.fight = new AscNet.GameServer.Game.Fight(
+                new PreFightRequest { PreFightData = new() { StageId = (uint)matchStage } },
+                (uint)matchFightId);
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                88_202,
+                CreateMissingStageSettleRequest((uint)matchStage, matchFightId, uid));
+            _ = ReadPushPayload<NotifyStageData>(
+                harness, nameof(NotifyStageData), "Guide settlement reconcile stage push");
+            _ = ReadPushPayload<NotifyTask>(
+                harness, nameof(NotifyTask), "Guide settlement reconcile task push");
+            NotifyGuide reconcileNotify = ReadPushPayload<NotifyGuide>(
+                harness,
+                nameof(NotifyGuide),
+                "Guide settlement reconcile NotifyGuide");
+            AssertEqual(matchGuide.Id, reconcileNotify.GuideGroupId,
+                "Guide settlement reconcile notified guide");
+            AssertEqual(0, ReadResponsePayload<FightSettleResponse>(
+                harness, 88_202, nameof(FightSettleResponse), "Guide settlement reconcile fight settle").Code,
+                "Guide settlement reconcile fight settle Code");
+            AssertEqual(true, player.PlayerData.GuideData.Contains(matchGuide.Id),
+                "Guide settlement reconcile persists guide");
+            int savesAfterCompletion = playerSaves.ReplaceOneCalls;
+            AssertEqual(true, savesAfterCompletion > 0,
+                "Guide settlement reconcile persists player");
+            AssertEqual(null, harness.Session.OpenedGuideGroupId,
+                "Guide settlement reconcile clears opened guide");
+            AscNet.Common.Database.Player reload =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(player.ToBson());
+            AssertEqual(true, reload.PlayerData.GuideData.Contains(matchGuide.Id),
+                "Guide settlement reconcile remains in login GuideData");
+            AssertEqual(1, player.PlayerData.GuideData.Count(id => id == matchGuide.Id),
+                "Guide settlement reconcile records guide once");
+
+            // Wrong-stage settle: open other guide but pass a stage it does not gate on → no completion.
+            InvokeRegisteredRequestHandler(
+                nameof(GuideOpenRequest),
+                harness.Session,
+                88_203,
+                new GuideCompleteRequest { GuideGroupId = otherGuide.Id });
+            ReadResponsePayload<AscNet.Common.MsgPack.GuideOpenResponse>(
+                harness,
+                88_203,
+                nameof(AscNet.Common.MsgPack.GuideOpenResponse),
+                "Guide settlement wrong-stage open");
+            long wrongStageFightId = 88_204;
+            harness.Session.fight = new AscNet.GameServer.Game.Fight(
+                new PreFightRequest { PreFightData = new() { StageId = (uint)matchStage } },
+                (uint)wrongStageFightId);
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                88_205,
+                CreateMissingStageSettleRequest((uint)matchStage, wrongStageFightId, uid));
+            _ = ReadPushPayload<NotifyStageData>(
+                harness, nameof(NotifyStageData), "Guide settlement wrong-stage stage push");
+            _ = ReadPushPayload<NotifyTask>(
+                harness, nameof(NotifyTask), "Guide settlement wrong-stage task push");
+            AssertEqual(0, ReadResponsePayload<FightSettleResponse>(
+                harness, 88_205, nameof(FightSettleResponse), "Guide settlement wrong-stage fight settle").Code,
+                "Guide settlement wrong-stage fight settle Code");
+            AssertEqual(false, player.PlayerData.GuideData.Contains(otherGuide.Id),
+                "Guide settlement wrong-stage does not complete guide");
+            AssertNoAvailablePacket(harness, "Guide settlement wrong-stage");
+
+            // Failed settle on the gated stage: no completion.
+            long failedFightId = 88_206;
+            harness.Session.fight = new AscNet.GameServer.Game.Fight(
+                new PreFightRequest { PreFightData = new() { StageId = (uint)otherStage } },
+                (uint)failedFightId);
+            FightSettleRequest failedSettle = CreateMissingStageSettleRequest((uint)otherStage, failedFightId, uid);
+            failedSettle.Result.IsWin = false;
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                88_207,
+                failedSettle);
+            FightSettleResponse failedSettleResponse = ReadResponsePayload<FightSettleResponse>(
+                harness, 88_207, nameof(FightSettleResponse), "Guide settlement failed fight settle");
+            AssertEqual(false, failedSettleResponse.Settle?.IsWin == true,
+                "Guide settlement failed fight settle reported loss");
+            AssertEqual(false, player.PlayerData.GuideData.Contains(otherGuide.Id),
+                "Guide settlement failed settle does not complete guide");
+            AssertNoAvailablePacket(harness, "Guide settlement failed");
         }
 
         private static void ValidateRequestHandlerRegistration(string requestName)
