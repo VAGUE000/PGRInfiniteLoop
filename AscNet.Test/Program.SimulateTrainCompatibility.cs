@@ -29,14 +29,18 @@ internal partial class Program
         AssertEqual(0, ronin.ImpasseTimeId, "SimulateTrain Ronin ImpasseTimeId");
         AssertEqual(true, ActivityScheduleService.IsOpen(ronin.TimeId, DateTimeOffset.UtcNow),
             "SimulateTrain permanent practice schedule is open");
+        Dictionary<int, ActivityScheduleEntry> simulateTrainSchedules = [];
         foreach (int timeId in bosses
                      .SelectMany(boss => new[] { boss.TimeId, boss.ImpasseTimeId })
                      .Where(timeId => timeId > 0)
                      .Distinct())
         {
-            AssertEqual(true, ActivityScheduleService.TryGet(timeId, out _),
+            AssertEqual(true, ActivityScheduleService.TryGet(timeId, out ActivityScheduleEntry schedule),
                 $"SimulateTrain TimeId {timeId} has an authoritative schedule");
+            simulateTrainSchedules[timeId] = schedule;
         }
+        DateTimeOffset allSchedulesOpenAt = DateTimeOffset.FromUnixTimeSeconds(
+            simulateTrainSchedules.Values.Max(schedule => schedule.StartTime));
         List<SimulateTrainPeriodBuffTable> periodBuffs =
             TableReaderV2.Parse<SimulateTrainPeriodBuffTable>();
         AssertEqual(22, periodBuffs.Count, "SimulateTrain period buff row count");
@@ -74,7 +78,6 @@ internal partial class Program
                 typeof(DateTimeOffset),
                 typeof(int).MakeByRefType()
             ]);
-        DateTimeOffset allSchedulesOpenAt = DateTimeOffset.FromUnixTimeSeconds(1_742_983_200);
         PreFightResponse.PreFightResponseFightData fightData = new() { StageId = request.PreFightData.StageId };
         object?[] preFightArguments = [request.PreFightData, fightData, allSchedulesOpenAt, 0];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, preFightArguments) ?? false),
@@ -188,45 +191,51 @@ internal partial class Program
             return (int)(arguments[3] ?? -1);
         }
 
-        const long shorthaltStartTime = 1_742_810_400;
-        const long vonnegutStartTime = 1_742_983_200;
-        SimulateTrainMonsterTable shorthalt = bosses.Single(boss => boss.Id == 3_065);
-        SimulateTrainMonsterTable vonnegut = bosses.Single(boss => boss.Id == 3_066);
-        AssertEqual(36_303, shorthalt.TimeId, "SimulateTrain Shorthalt TimeId");
-        AssertEqual(36_303, shorthalt.ImpasseTimeId, "SimulateTrain Shorthalt ImpasseTimeId");
-        AssertEqual(36_304, vonnegut.TimeId, "SimulateTrain Vonnegut TimeId");
-        AssertEqual(36_304, vonnegut.ImpasseTimeId, "SimulateTrain Vonnegut ImpasseTimeId");
-        AssertEqual(true,
-            ActivityScheduleService.TryGet(shorthalt.TimeId, out ActivityScheduleEntry shorthaltSchedule),
-            "SimulateTrain Shorthalt schedule is configured");
-        AssertEqual(true,
-            ActivityScheduleService.TryGet(vonnegut.TimeId, out ActivityScheduleEntry vonnegutSchedule),
-            "SimulateTrain Vonnegut schedule is configured");
-        AssertEqual(shorthaltStartTime, shorthaltSchedule.StartTime,
-            "SimulateTrain Shorthalt authoritative start time");
-        AssertEqual(vonnegutStartTime, vonnegutSchedule.StartTime,
-            "SimulateTrain Vonnegut authoritative start time");
-
-        DateTimeOffset shorthaltStart = DateTimeOffset.FromUnixTimeSeconds(shorthaltStartTime);
-        AssertEqual(20_003_024, PreFightCodeAt(shorthalt, shorthaltStart.AddSeconds(-1)),
-            "SimulateTrain Shorthalt is locked before its schedule");
-        AssertEqual(0, PreFightCodeAt(shorthalt, shorthaltStart),
-            "SimulateTrain Shorthalt opens at its scheduled start");
-        AssertEqual(20_003_024, PreFightCodeAt(vonnegut, shorthaltStart),
-            "SimulateTrain Vonnegut remains locked during Shorthalt's window");
-        AssertEqual(0, PreFightCodeAt(vonnegut, DateTimeOffset.FromUnixTimeSeconds(vonnegutStartTime)),
-            "SimulateTrain Vonnegut opens at its scheduled start");
-        foreach (SimulateTrainMonsterTable boss in bosses)
+        void AssertScheduleWindow(
+            SimulateTrainMonsterTable boss,
+            int difficulty,
+            string mode,
+            params ActivityScheduleEntry[] schedules)
         {
-            AssertEqual(0, PreFightCodeAt(boss, allSchedulesOpenAt),
-                $"SimulateTrain boss {boss.Id} base difficulty opens after its schedule");
-            if (boss.ImpasseTimeId > 0)
+            long opensAt = schedules.Max(schedule => schedule.StartTime);
+            long closesAt = schedules
+                .Select(schedule => schedule.EndTime)
+                .Where(time => time > 0)
+                .DefaultIfEmpty()
+                .Min();
+            int CodeAt(long time) => PreFightCodeAt(
+                boss,
+                DateTimeOffset.FromUnixTimeSeconds(time),
+                difficulty);
+
+            if (opensAt > 0)
             {
-                AssertEqual(0, PreFightCodeAt(boss, allSchedulesOpenAt, boss.NpcId.Count),
-                    $"SimulateTrain boss {boss.Id} Impasse difficulty opens after its schedule");
+                AssertEqual(20_003_024, CodeAt(opensAt - 1),
+                    $"SimulateTrain boss {boss.Id} {mode} is locked before its schedule");
+            }
+            AssertEqual(0, CodeAt(opensAt),
+                $"SimulateTrain boss {boss.Id} {mode} opens at its schedule");
+            if (closesAt > 0)
+            {
+                AssertEqual(20_003_024, CodeAt(closesAt),
+                    $"SimulateTrain boss {boss.Id} {mode} locks when its schedule ends");
             }
         }
 
+        foreach (SimulateTrainMonsterTable boss in bosses)
+        {
+            ActivityScheduleEntry baseSchedule = simulateTrainSchedules[boss.TimeId];
+            AssertScheduleWindow(boss, 1, "base", baseSchedule);
+            if (boss.ImpasseTimeId > 0)
+            {
+                AssertScheduleWindow(
+                    boss,
+                    boss.NpcId.Count,
+                    "Impasse",
+                    baseSchedule,
+                    simulateTrainSchedules[boss.ImpasseTimeId]);
+            }
+        }
 
         request.PreFightData.SimulateTrainInfo!.BossId = 9_999;
         object?[] invalidPreFightArguments =
