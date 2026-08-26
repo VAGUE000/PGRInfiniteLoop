@@ -205,7 +205,6 @@ namespace AscNet.GameServer.Handlers
         {
             FubenMainLine2Data persistedData = session.player.FubenMainLine2Data ??= new();
             NormalizeMainLine2Data(persistedData);
-            EnsureNavigableExhibitionChapter(persistedData);
             LifeTreeModule.NormalizePersistedChapterAcknowledgements(session.player);
 
             FubenMainLine2Data data = CloneMainLine2Data(persistedData);
@@ -224,19 +223,6 @@ namespace AscNet.GameServer.Handlers
             data.EggsTreasureDistributeData ??= new();
             data.FirstPassTime ??= new();
             data.MessageState ??= new();
-        }
-        private static bool EnsureNavigableExhibitionChapter(FubenMainLine2Data data)
-        {
-            if (IsExhibitionChapter(data.LastExhibitionChapterId))
-                return false;
-
-            int chapterId = LifeTreeModule.GetCurrentPopupChapterId()
-                ?? LifeTreeModule.GetNavigableChapterIds().Order().FirstOrDefault();
-            if (chapterId == 0)
-                return false;
-
-            data.LastExhibitionChapterId = chapterId;
-            return true;
         }
 
         private static bool IsExhibitionChapter(int chapterId)

@@ -3919,17 +3919,6 @@ namespace AscNet.Test
 
             const long playerId = 88_001;
             const long existingAccountStageId = 10010801;
-            long[] defaultPassedMainStoryStageIds =
-            [
-                10010101,
-                10010102,
-                10010103,
-                10010104,
-                10010201,
-                10010202,
-                10010203,
-                10010204
-            ];
             const long passedStarsMark = 7;
             AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
             player.UseBackgroundId = 14_099_999;
@@ -3968,8 +3957,7 @@ namespace AscNet.Test
                 BestCardIds = [1021001],
                 LastCardIds = [1021001]
             });
-            int defaultMainStoryStagesBeforeLogin = defaultPassedMainStoryStageIds.Count(stage.Stages.ContainsKey);
-            AssertEqual(0, defaultMainStoryStagesBeforeLogin, "Login account compatibility test setup default main-story awaken gate stages before login");
+            HashSet<long> initialStageIds = stage.Stages.Keys.ToHashSet();
 
             NotifyLogin productionLogin;
             using (LoopbackSessionHarness harness = new(
@@ -4025,11 +4013,16 @@ namespace AscNet.Test
                 throw new InvalidDataException("NotifyLogin FubenData.StageData MessagePack round-trip: expected initialized account stages.");
             if (!loginStageData.TryGetValue(existingAccountStageId, out StageDatum? loginStage) || !loginStage.Passed)
                 throw new InvalidDataException("NotifyLogin FubenData.StageData MessagePack round-trip: expected completed account stages for unlocked home features.");
-            AssertDefaultPassedStageData(
-                defaultPassedMainStoryStageIds,
-                loginStageData,
-                stage.Stages,
-                "NotifyLogin FubenData.StageData default main-story awaken gate chain");
+            AssertEqual(0,
+                loginStageData.Count(stage =>
+                    !initialStageIds.Contains(stage.Key)
+                    && stage.Value.Passed),
+                "NotifyLogin does not synthesize completed stage progress");
+            AssertEqual(0,
+                stage.Stages.Count(stage =>
+                    !initialStageIds.Contains(stage.Key)
+                    && stage.Value.Passed),
+                "NotifyLogin does not persist synthesized completed stage progress");
             AssertEqual(player.PlayerData.Level, roundTrip.PlayerData.Level, "NotifyLogin PlayerData.Level MessagePack round-trip");
             AssertEqual(true, roundTrip.IsSetFightCgEnable, "NotifyLogin IsSetFightCgEnable MessagePack round-trip");
             AssertCommunicationIdSet(
@@ -4043,32 +4036,6 @@ namespace AscNet.Test
             if (roundTrip.FashionColors is null)
                 throw new InvalidDataException("NotifyLogin FashionColors MessagePack round-trip: expected initialized list.");
 
-            static void AssertDefaultPassedStageData(
-                IReadOnlyList<long> expectedStageIds,
-                IReadOnlyDictionary<long, StageDatum> loginStageData,
-                IReadOnlyDictionary<long, StageDatum> persistedStageData,
-                string name)
-            {
-                int loginPassedStageCount = 0;
-                int persistedPassedStageCount = 0;
-                foreach (long expectedStageId in expectedStageIds)
-                {
-                    if (!loginStageData.TryGetValue(expectedStageId, out StageDatum? loginStage))
-                        throw new InvalidDataException($"{name}: login payload missing default passed stage {expectedStageId}.");
-                    AssertEqual(true, loginStage.Passed, $"{name} stage {expectedStageId} login payload Passed");
-                    AssertEqual(7, loginStage.StarsMark, $"{name} stage {expectedStageId} login payload StarsMark");
-                    loginPassedStageCount++;
-
-                    if (!persistedStageData.TryGetValue(expectedStageId, out StageDatum? persistedStage))
-                        throw new InvalidDataException($"{name}: persisted account stage document missing default passed stage {expectedStageId}.");
-                    AssertEqual(true, persistedStage.Passed, $"{name} stage {expectedStageId} persisted Passed");
-                    AssertEqual(7, persistedStage.StarsMark, $"{name} stage {expectedStageId} persisted StarsMark");
-                    persistedPassedStageCount++;
-                }
-
-                AssertEqual(expectedStageIds.Count, loginPassedStageCount, $"{name} login payload migrated stage count");
-                AssertEqual(expectedStageIds.Count, persistedPassedStageCount, $"{name} persisted migrated stage count");
-            }
 
             static void AssertCommunicationIdSet(IReadOnlyList<long> expectedIds, IReadOnlyList<long> actualIds, string name)
             {
@@ -5685,10 +5652,10 @@ namespace AscNet.Test
             FubenMainLine2Data initialBattleScreenData =
                 (FubenMainLine2Data?)buildMainLine2LoginData.Invoke(null, [harness.Session])
                 ?? throw new InvalidDataException("MainLine2Module.BuildLoginData returned nil.");
-            AssertEqual(currentPopupChapterId, initialBattleScreenData.LastExhibitionChapterId,
-                "initial Battle Screen destination is table-derived current LifeTree popup chapter");
-            AssertEqual(currentPopupChapterId, player.FubenMainLine2Data.LastExhibitionChapterId,
-                "initial Battle Screen destination persists");
+            AssertEqual(0, initialBattleScreenData.LastExhibitionChapterId,
+                "initial Battle Screen destination remains unset");
+            AssertEqual(0, player.FubenMainLine2Data.LastExhibitionChapterId,
+                "initial Battle Screen destination does not persist a speculative chapter");
             long[] expectedAcknowledgements = TableReaderV2.Parse<AscNet.Table.V2.share.lifetree.LifeTreeChapterTable>()
                 .Any(chapter => chapter.Id == currentPopupChapterId)
                     ? []
@@ -28675,6 +28642,52 @@ namespace AscNet.Test
                     "GuideComplete invalid response");
             AssertEqual(1, invalidGuideCompleteResponse.Code, "GuideComplete invalid response Code");
             AssertNoAvailablePacket(guideCompleteHarness, "GuideComplete invalid request");
+            Dictionary<int, GuideCompleteTable> completionRows = TableReaderV2.Parse<GuideCompleteTable>()
+                .ToDictionary(completion => completion.Id);
+            List<(GuideGroupTable Guide, GuideCompleteTable Completion)> serverCompletedGuides = guideGroups
+                .Where(guide => guide.RewardId == 0 && completionRows.ContainsKey(guide.CompleteId))
+                .Select(guide => (Guide: guide, Completion: completionRows[guide.CompleteId]))
+                .Where(entry => entry.Completion.Param.Count >= 2
+                    && entry.Completion.Param[0] is 2 or 12)
+                .ToList();
+            if (serverCompletedGuides.Count < 2)
+                throw new InvalidDataException("Guide login reconciliation requires two server-completed guides.");
+
+            (GuideGroupTable Guide, GuideCompleteTable Completion) reconciledGuide = serverCompletedGuides[0];
+            (GuideGroupTable Guide, GuideCompleteTable Completion) unreconciledGuide =
+                serverCompletedGuides.First(entry => entry.Guide.Id != reconciledGuide.Guide.Id);
+            const long reconcilePlayerId = 88_150;
+            AscNet.Common.Database.Player reconcilePlayer = CreateDrawCompatibilityPlayer(reconcilePlayerId);
+            AscNet.Common.Database.Stage reconcileStage = CreateLoginAccountCompatibilityStage(reconcilePlayerId);
+            reconcileStage.AddStage(new StageDatum
+            {
+                StageId = reconciledGuide.Completion.Param[1],
+                Passed = true
+            });
+            MethodInfo reconcileStageCompletedGuides = RequiredMethod(
+                RequiredAscNetGameServerType("AscNet.GameServer.Handlers.GuideModule"),
+                "ReconcileStageCompletedGuides",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(AscNet.Common.Database.Player), typeof(AscNet.Common.Database.Stage)]);
+            using (MongoCollectionOverride reconcileMongo =
+                   MongoCollectionOverride.InstallForDailySignInCompatibility(
+                       out RecordingMongoCollectionProxy<AscNet.Common.Database.Player> reconcilePlayerSaves,
+                       out _,
+                       out _))
+            {
+                reconcileStageCompletedGuides.Invoke(null, [reconcilePlayer, reconcileStage]);
+                AssertEqual(true, reconcilePlayer.PlayerData.GuideData.Contains(reconciledGuide.Guide.Id),
+                    "Guide login reconciliation records passed-stage guide");
+                AssertEqual(false, reconcilePlayer.PlayerData.GuideData.Contains(unreconciledGuide.Guide.Id),
+                    "Guide login reconciliation leaves unmatched guide incomplete");
+                AssertEqual(1, reconcilePlayerSaves.ReplaceOneCalls,
+                    "Guide login reconciliation persists once");
+
+                reconcileStageCompletedGuides.Invoke(null, [reconcilePlayer, reconcileStage]);
+                AssertEqual(1, reconcilePlayerSaves.ReplaceOneCalls,
+                    "Guide login reconciliation is idempotent");
+            }
+
             ValidateMainLineLastPassStageProgression();
         }
 
@@ -28687,6 +28700,26 @@ namespace AscNet.Test
                 .ToList();
             if (chapters.Count != 2)
                 throw new InvalidDataException("Mainline last-pass progression requires two configured chapters.");
+            Dictionary<int, GuideCompleteTable> guideCompletions = TableReaderV2.Parse<GuideCompleteTable>()
+                .ToDictionary(completion => completion.Id);
+            List<(GuideGroupTable Guide, GuideCompleteTable Completion)> stageCompletedGuides =
+                TableReaderV2.Parse<GuideGroupTable>()
+                    .Where(guide => guide.RewardId == 0 && guideCompletions.ContainsKey(guide.CompleteId))
+                    .Select(guide => (Guide: guide, Completion: guideCompletions[guide.CompleteId]))
+                    .Where(entry => entry.Completion.Param.Count >= 2
+                        && entry.Completion.Param[0] is 2 or 12
+                        && entry.Completion.Param[1] > 0)
+                    .ToList();
+            if (stageCompletedGuides.Count < 2)
+                throw new InvalidDataException("Guide stage completion requires two configured completion modes.");
+
+            uint matchingGuideStageId = checked((uint)chapters[0].StageId.First(stageId => stageId > 0));
+            (GuideGroupTable Guide, GuideCompleteTable Completion) matchingGuide =
+                stageCompletedGuides.First(entry => entry.Completion.Param[1] == matchingGuideStageId);
+            (GuideGroupTable Guide, GuideCompleteTable Completion) nonmatchingGuide =
+                stageCompletedGuides.First(entry => entry.Guide.Id != matchingGuide.Guide.Id
+                    && entry.Completion.Param[1] != chapters[1].StageId.First(stageId => stageId > 0));
+
 
             const long uid = 88_200;
             using MongoCollectionOverride mongo =
@@ -28704,6 +28737,21 @@ namespace AscNet.Test
             {
                 MainLineChapterTable chapter = chapters[index];
                 uint stageId = checked((uint)chapter.StageId.First(stageId => stageId > 0));
+                (GuideGroupTable Guide, GuideCompleteTable Completion) openedGuide =
+                    index == 0 ? matchingGuide : nonmatchingGuide;
+                int guidePacketId = 88_205 + index;
+                InvokeRegisteredRequestHandler(
+                    nameof(GuideOpenRequest),
+                    harness.Session,
+                    guidePacketId,
+                    new GuideCompleteRequest { GuideGroupId = openedGuide.Guide.Id });
+                AssertEqual(0, ReadResponsePayload<GuideOpenResponse>(
+                    harness,
+                    guidePacketId,
+                    nameof(GuideOpenResponse),
+                    $"Mainline chapter {chapter.ChapterId} guide open").Code,
+                    $"Mainline chapter {chapter.ChapterId} guide open Code");
+
                 long fightId = 88_201 + index;
                 int packetId = 88_210 + index;
                 harness.Session.fight = new AscNet.GameServer.Game.Fight(
@@ -28728,6 +28776,20 @@ namespace AscNet.Test
                     $"Mainline chapter {chapter.ChapterId} LastPassStage");
                 expectedLastPassStages[chapter.ChapterId] = stageId;
                 AssertNoAvailablePacket(harness, $"Mainline chapter {chapter.ChapterId} settle");
+                if (index == 0)
+                {
+                    AssertEqual(true, player.PlayerData.GuideData.Contains(openedGuide.Guide.Id),
+                        "Matching stage settlement completes opened server-driven guide");
+                    AssertEqual(null, harness.Session.OpenedGuideGroupId,
+                        "Matching stage settlement clears opened guide");
+                }
+                else
+                {
+                    AssertEqual(false, player.PlayerData.GuideData.Contains(openedGuide.Guide.Id),
+                        "Nonmatching stage settlement preserves incomplete opened guide");
+                    AssertEqual(openedGuide.Guide.Id, harness.Session.OpenedGuideGroupId,
+                        "Nonmatching stage settlement keeps opened guide pending");
+                }
             }
 
             AscNet.Common.Database.Player reload =

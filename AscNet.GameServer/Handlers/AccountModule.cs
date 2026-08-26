@@ -17,8 +17,6 @@ using AscNet.Table.V2.share.fuben.fashionstory;
 using AscNet.Table.V2.share.fuben.transfinite;
 using AscNet.Table.V2.share.miniactivity.dyemerge;
 using AscNet.Table.V2.share.miniactivity.hitmouse;
-using AscNet.Table.V2.share.condition;
-using AscNet.Table.V2.share.fuben.mainline2;
 using AscNet.Table.V2.share.theatre6;
 using AscNet.Table.V2.client.activitybrief;
 using AscNet.Table.V2.client.uimain;
@@ -155,17 +153,6 @@ namespace AscNet.GameServer.Handlers
     {
         internal const string CurrentApplicationVersion = "4.6.0";
         internal const string CurrentDocumentVersion = "4.6.7";
-        private static readonly long[] DefaultPassedMainStoryStageIds =
-        [
-            10010101,
-            10010102,
-            10010103,
-            10010104,
-            10010201,
-            10010202,
-            10010203,
-            10010204
-        ];
         private const long DefaultChatBoardId = 25000001;
         private const int ChangeAssistCharIdRejectedCode = 20002006;
 
@@ -705,6 +692,7 @@ namespace AscNet.GameServer.Handlers
             BossInshotModule.PrepareLogin(session.player, DateTimeOffset.UtcNow);
             FashionStoryModule.PrepareLogin(session.player, DateTimeOffset.UtcNow);
             TransfiniteModule.PrepareLogin(session.player, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            GuideModule.ReconcileStageCompletedGuides(session.player, session.stage);
             List<TimeLimitCtrlConfigList> timeLimitControls = BuildTimeLimitControlConfigList();
             NotifyLogin notifyLogin = new()
             {
@@ -823,73 +811,13 @@ namespace AscNet.GameServer.Handlers
 
         private static Dictionary<long, StageDatum> BuildLoginStageData(Session session)
         {
-            Dictionary<long, StageDatum> stageData = session.stage?.Stages is null
+            return session.stage?.Stages is null
                 ? new Dictionary<long, StageDatum>()
                 : new Dictionary<long, StageDatum>(session.stage.Stages);
-            bool changed = false;
-
-            foreach (long stageId in GetCurrentMainLine2PrerequisiteStageIds())
-                EnsureLoginPassedStage(session, stageData, stageId, ref changed);
-            foreach (long stageId in DefaultPassedMainStoryStageIds)
-                EnsureLoginPassedStage(session, stageData, stageId, ref changed);
-
-
-            if (changed)
-                session.stage?.Save();
-
-            return stageData;
-        }
-        private static IEnumerable<long> GetCurrentMainLine2PrerequisiteStageIds()
-        {
-            DateTimeOffset now = DateTimeOffset.UtcNow;
-            Dictionary<int, ConditionTable> conditions = TableReaderV2.Parse<ConditionTable>()
-                .ToDictionary(condition => condition.Id);
-            return TableReaderV2.Parse<MainLine2ChapterTable>()
-                .Where(chapter => chapter.ActivityTimeId.GetValueOrDefault() > 0
-                    && ActivityScheduleService.IsOpen(chapter.ActivityTimeId.Value, now))
-                .Select(chapter => conditions.GetValueOrDefault(chapter.OpenCondition))
-                .Where(condition => condition is not null
-                    && condition.Type == 10105
-                    && condition.Params.Count > 0
-                    && condition.Params[0] > 0)
-                .Select(condition => (long)condition!.Params[0])
-                .Distinct()
-                .Order();
         }
 
 
-        private static void EnsureLoginPassedStage(Session session, Dictionary<long, StageDatum> stageData, long stageId, ref bool changed)
-        {
-            if (stageData.ContainsKey(stageId))
-                return;
 
-            StageDatum passedStage = BuildPassedStage(stageId);
-            stageData[stageId] = passedStage;
-            session.stage?.AddStage(passedStage);
-            changed = true;
-        }
-
-        private static StageDatum BuildPassedStage(long stageId)
-        {
-            long now = DateTimeOffset.Now.ToUnixTimeSeconds();
-            return new()
-            {
-                StageId = stageId,
-                StarsMark = 7,
-                Passed = true,
-                PassTimesToday = 0,
-                PassTimesTotal = 1,
-                BuyCount = 0,
-                Score = 0,
-                LastPassTime = now,
-                RefreshTime = now,
-                CreateTime = now,
-                BestRecordTime = 0,
-                LastRecordTime = 0,
-                BestCardIds = [1021001],
-                LastCardIds = [1021001]
-            };
-        }
 
         private static DlcCharacter ToDlcCharacter(CharacterData character)
         {

@@ -2565,6 +2565,7 @@ namespace AscNet.GameServer.Handlers
             if (updatedRepeatChallenge)
                 session.SendPush(RepeatChallengeModule.BuildExpChange(session.player));
             TaskModule.RecordStageClear(session, (int)req.Result.StageId, challengeCount);
+            GuideModule.CompleteOpenedGuideOnStageSettle(session, [req.Result.StageId, responseStageId]);
             session.SendResponse(fightSettleResponse, packet.Id);
         }
 

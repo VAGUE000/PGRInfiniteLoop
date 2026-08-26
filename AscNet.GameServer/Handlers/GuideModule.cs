@@ -46,15 +46,18 @@ namespace AscNet.GameServer.Handlers
     {
         private static readonly Lazy<Dictionary<int, GuideGroupTable>> GuideGroups = new(() =>
             TableReaderV2.Parse<GuideGroupTable>().ToDictionary(guide => guide.Id));
-        private static readonly Lazy<HashSet<int>> GuideCompletions = new(() =>
-            TableReaderV2.Parse<GuideCompleteTable>().Select(completion => completion.Id).ToHashSet());
+        private static readonly Lazy<Dictionary<int, GuideCompleteTable>> GuideCompletions = new(() =>
+            TableReaderV2.Parse<GuideCompleteTable>().ToDictionary(completion => completion.Id));
+        private static readonly HashSet<int> StageCompletionModes = [2, 12];
         [RequestPacketHandler("GuideOpenRequest")]
         public static void GuideOpenRequestHandler(Session session, Packet.Request packet)
         {
             GuideCompleteRequest request = packet.Deserialize<GuideCompleteRequest>();
+            bool valid = IsValidGuide(request.GuideGroupId);
+            session.OpenedGuideGroupId = valid ? request.GuideGroupId : null;
             session.SendResponse(new GuideOpenResponse
             {
-                Code = IsValidGuide(request.GuideGroupId) ? 0 : 1
+                Code = valid ? 0 : 1
             }, packet.Id);
         }
 
@@ -134,7 +137,7 @@ namespace AscNet.GameServer.Handlers
         {
             GuideCompleteRequest request = MessagePackSerializer.Deserialize<GuideCompleteRequest>(packet.Content);
             if (!GuideGroups.Value.TryGetValue(request.GuideGroupId, out GuideGroupTable? guide)
-                || !GuideCompletions.Value.Contains(guide.CompleteId))
+                || !GuideCompletions.Value.ContainsKey(guide.CompleteId))
             {
                 session.SendResponse(new GuideCompleteResponse { Code = 1 }, packet.Id);
                 return;
@@ -197,6 +200,76 @@ namespace AscNet.GameServer.Handlers
 
 
 
+        internal static void CompleteOpenedGuideOnStageSettle(Session session, IEnumerable<uint> settledStageIds)
+        {
+            if (session.OpenedGuideGroupId is not int openedGuideId
+                || !GuideGroups.Value.TryGetValue(openedGuideId, out GuideGroupTable? guide)
+                || guide.RewardId != 0
+                || !GuideCompletions.Value.TryGetValue(guide.CompleteId, out GuideCompleteTable? completion)
+                || completion.Param.Count < 2
+                || !StageCompletionModes.Contains(completion.Param[0])
+                || completion.Param[1] <= 0
+                || !settledStageIds.Contains((uint)completion.Param[1]))
+            {
+                return;
+            }
+
+            session.player.PlayerData.GuideData ??= new();
+            if (session.player.PlayerData.GuideData.Contains(openedGuideId))
+            {
+                session.OpenedGuideGroupId = null;
+                return;
+            }
+
+            session.player.PlayerData.GuideData.Add(openedGuideId);
+            try
+            {
+                session.player.SaveChecked();
+            }
+            catch (Exception exception)
+            {
+                session.player.PlayerData.GuideData.Remove(openedGuideId);
+                session.log.Error($"Failed to persist stage-completed guide {openedGuideId}: {exception}");
+                return;
+            }
+
+            session.OpenedGuideGroupId = null;
+            session.SendPush(new NotifyGuide { GuideGroupId = openedGuideId });
+        }
+
+        internal static void ReconcileStageCompletedGuides(Player player, Stage? stage)
+        {
+            if (stage?.Stages is null)
+                return;
+
+            player.PlayerData.GuideData ??= new();
+            HashSet<long> completedGuideIds = player.PlayerData.GuideData.ToHashSet();
+            HashSet<int> passedStageIds = stage.Stages.Values
+                .Where(stageData => stageData.Passed
+                    && stageData.StageId is >= int.MinValue and <= int.MaxValue)
+                .Select(stageData => (int)stageData.StageId)
+                .ToHashSet();
+            bool changed = false;
+
+            foreach (GuideGroupTable guide in GuideGroups.Value.Values.Where(guide => guide.RewardId == 0))
+            {
+                if (!GuideCompletions.Value.TryGetValue(guide.CompleteId, out GuideCompleteTable? completion)
+                    || completion.Param.Count < 2
+                    || !StageCompletionModes.Contains(completion.Param[0])
+                    || !passedStageIds.Contains(completion.Param[1])
+                    || !completedGuideIds.Add(guide.Id))
+                {
+                    continue;
+                }
+
+                player.PlayerData.GuideData.Add(guide.Id);
+                changed = true;
+            }
+
+            if (changed)
+                player.SaveChecked();
+        }
+
         internal static void SkipCommonGuides(Player player)
         {
             player.PlayerData.GuideData ??= new();
@@ -210,7 +283,7 @@ namespace AscNet.GameServer.Handlers
 
         private static bool IsValidGuide(int guideGroupId)
             => GuideGroups.Value.TryGetValue(guideGroupId, out GuideGroupTable? guide)
-                && GuideCompletions.Value.Contains(guide.CompleteId);
+                && GuideCompletions.Value.ContainsKey(guide.CompleteId);
     }
 
 }
