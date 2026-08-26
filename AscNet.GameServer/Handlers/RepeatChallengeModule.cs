@@ -1,3 +1,4 @@
+using System.Globalization;
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
@@ -5,6 +6,7 @@ using AscNet.Table.V2.share.condition;
 using AscNet.Table.V2.share.fuben;
 using AscNet.Table.V2.share.fuben.repeatchallenge;
 using MessagePack;
+using Newtonsoft.Json.Linq;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -36,6 +38,10 @@ namespace AscNet.GameServer.Handlers
 
     internal static class RepeatChallengeModule
     {
+        private const string ConfigPath = "Configs/simulated_battlefield.json";
+        private sealed record EncounterNpc(int NpcId, IReadOnlyList<int> BufferIds);
+        private sealed record EncounterGroup(IReadOnlyList<EncounterNpc> Npcs);
+        private sealed record SettlementGood(int RewardType, int TemplateId, int Count);
         private sealed record Data(
             RepeatChallengeActivityTable Activity,
             RepeatChallengeChapterTable Chapter,
@@ -43,7 +49,9 @@ namespace AscNet.GameServer.Handlers
             StageTable StageData,
             IReadOnlyList<RepeatChallengeLevelTable> Levels,
             IReadOnlyDictionary<int, RepeatChallengeRewardTable> Rewards,
-            IReadOnlyDictionary<int, ConditionTable> Conditions);
+            IReadOnlyDictionary<int, ConditionTable> Conditions,
+            IReadOnlyList<EncounterGroup> EncounterGroups,
+            IReadOnlyList<SettlementGood> SettlementGoods);
 
         private static readonly Lazy<Data> Runtime = new(Load);
 
@@ -70,7 +78,7 @@ namespace AscNet.GameServer.Handlers
 
         public static bool IsStage(uint stageId) => Runtime.Value.Stage.Id == stageId;
 
-        public static void ApplyPreFight(Player player, PreFightResponse.PreFightResponseFightData fightData)
+        public static void ApplyPreFight(Player player, PreFightResponse.PreFightResponseFightData fightData, int challengeCount)
         {
             if (!IsStage(fightData.StageId)) return;
             SimulatedBattlefieldState state = GetState(player, out bool changed);
@@ -83,6 +91,18 @@ namespace AscNet.GameServer.Handlers
                 .Where(id => id > 0)
                 .Cast<dynamic>()
                 .ToList();
+            fightData.NpcGroupList = data.EncounterGroups.Select(group => new Dictionary<string, object>
+            {
+                ["NpcList"] = group.Npcs.Select(npc => new Dictionary<string, object>
+                {
+                    ["NpcId"] = npc.NpcId,
+                    ["BufferIds"] = npc.BufferIds,
+                    ["Level"] = 0,
+                    ["MagicInfos"] = Array.Empty<object>(),
+                    ["AttrTable"] = new Dictionary<string, object>()
+                }).ToList()
+            }).ToList();
+            fightData.CustomData = challengeCount.ToString(CultureInfo.InvariantCulture);
         }
 
         public static bool RecordStageClear(Player player, uint stageId, int challengeCount)
@@ -95,6 +115,20 @@ namespace AscNet.GameServer.Handlers
             state.RepeatChallengeLevel = ResolveLevel(state.RepeatChallengeExp);
             state.RepeatChallengeCleared = true;
             return normalized || oldLevel != state.RepeatChallengeLevel || oldExp != state.RepeatChallengeExp || oldCleared != state.RepeatChallengeCleared;
+        }
+
+        public static bool TryGetSettlementGoods(uint stageId, out List<AscNet.Table.V2.share.reward.RewardGoodsTable> goods)
+        {
+            goods = [];
+            if (!IsStage(stageId)) return false;
+            goods = Runtime.Value.SettlementGoods.Select((reward, index) =>
+                new AscNet.Table.V2.share.reward.RewardGoodsTable
+                {
+                    Id = index,
+                    TemplateId = reward.TemplateId,
+                    Count = reward.Count
+                }).ToList();
+            return true;
         }
 
         public static NotifyRcExpChange BuildExpChange(Player player)
@@ -205,9 +239,44 @@ namespace AscNet.GameServer.Handlers
             RepeatChallengeLevelTable[] levels = TableReaderV2.Parse<RepeatChallengeLevelTable>().OrderBy(row => row.Id).ToArray();
             if (levels.Length == 0 || levels.Select(row => row.Id).SequenceEqual(Enumerable.Range(1, levels.Length)) is false)
                 throw new InvalidDataException("RepeatChallengeLevel IDs must be contiguous from 1.");
+            JArray configuredGroups = JsonSnapshot.LoadObject(ConfigPath)["RepeatChallengeEncounter"]?["NpcGroups"] as JArray
+                ?? throw new InvalidDataException("Simulated Battlefield encounter has no NpcGroups.");
+            EncounterGroup[] encounterGroups = configuredGroups.Select((group, groupIndex) =>
+            {
+                JArray npcs = group as JArray
+                    ?? throw new InvalidDataException($"Simulated Battlefield encounter group {groupIndex} must be an array.");
+                EncounterNpc[] parsed = npcs.Select((npc, npcIndex) =>
+                {
+                    int npcId = npc.Value<int?>("NpcId") ?? 0;
+                    int[] bufferIds = npc["BufferIds"]?.Values<int>().ToArray() ?? [];
+                    if (npcId <= 0 || bufferIds.Any(id => id <= 0))
+                        throw new InvalidDataException($"Simulated Battlefield encounter group {groupIndex} NPC {npcIndex} is invalid.");
+                    return new EncounterNpc(npcId, bufferIds);
+                }).ToArray();
+                return parsed.Length > 0
+                    ? new EncounterGroup(parsed)
+                    : throw new InvalidDataException($"Simulated Battlefield encounter group {groupIndex} is empty.");
+            }).ToArray();
+            if (encounterGroups.Length == 0)
+                throw new InvalidDataException("Simulated Battlefield encounter has no NPC groups.");
+            JArray configuredGoods = JsonSnapshot.LoadObject(ConfigPath)["RepeatChallengeEncounter"]?["SettlementGoods"] as JArray
+                ?? throw new InvalidDataException("Simulated Battlefield encounter has no SettlementGoods.");
+            SettlementGood[] settlementGoods = configuredGoods.Select((good, index) =>
+            {
+                int rewardType = good.Value<int?>("RewardType") ?? 0;
+                int templateId = good.Value<int?>("TemplateId") ?? 0;
+                int count = good.Value<int?>("Count") ?? 0;
+                if (rewardType != 1 || templateId <= 0 || count <= 0)
+                    throw new InvalidDataException($"Simulated Battlefield settlement good {index} is invalid.");
+                return new SettlementGood(rewardType, templateId, count);
+            }).ToArray();
+            if (settlementGoods.Length == 0)
+                throw new InvalidDataException("Simulated Battlefield encounter has no settlement goods.");
             return new(activity, chapter, stage, stageData, levels,
                 TableReaderV2.Parse<RepeatChallengeRewardTable>().ToDictionary(row => row.Id),
-                TableReaderV2.Parse<ConditionTable>().ToDictionary(row => row.Id));
+                TableReaderV2.Parse<ConditionTable>().ToDictionary(row => row.Id),
+                encounterGroups,
+                settlementGoods);
         }
 
         private static SimulatedBattlefieldState GetState(Player player, out bool changed)

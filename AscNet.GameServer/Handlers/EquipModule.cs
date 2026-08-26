@@ -1316,7 +1316,7 @@ namespace AscNet.GameServer.Handlers
 
             int materialCost = configuredUseItem is null
                 ? 0
-                : GetConfiguredResonanceMaterialCost(configuredUseItem, request.UseItemId);
+                : ResolveEquipResonanceCost(equipTable, configuredUseItem, request.UseItemId);
             bool hasMaterial = materialCost > 0
                 && session.inventory.Items.Any(item =>
                     item.Id == request.UseItemId && item.Count >= materialCost);
@@ -1587,23 +1587,20 @@ namespace AscNet.GameServer.Handlers
                     .SkillId.Contains(selectedSkillId) == true) == true;
         }
 
-        private static int ResolveResonanceMaterialCost(
+        private static int ResolveEquipResonanceCost(
             EquipTable equip,
-            int useItemId,
-            List<EquipResonanceUseItemTable> useItemTables)
-        {
-            EquipResonanceUseItemTable? configured = useItemTables.Find(row => row.Id == equip.Id);
-            return configured is null ? 0 : GetConfiguredResonanceMaterialCost(configured, useItemId);
-        }
-        private static int GetResonanceMaterialCost(
-            EquipTable equip,
+            EquipResonanceUseItemTable configured,
             int useItemId)
         {
-            EquipResonanceUseItemTable? configured = TableReaderV2.Parse<EquipResonanceUseItemTable>()
-                .Find(row => row.Id == equip.Id);
-            return configured is null ? 0 : GetConfiguredResonanceMaterialCost(configured, useItemId);
+            int recipeCost = GetConfiguredResonanceMaterialCost(configured, useItemId);
+            if (recipeCost <= 0)
+                return recipeCost;
+            EquipConfigTable? discount = TableReaderV2.Parse<EquipConfigTable>()
+                .FirstOrDefault(row => row.SuitId == equip.SuitId && row.ItemId == useItemId);
+            return discount is not null && discount.DiscountCount > 0
+                ? discount.DiscountCount
+                : recipeCost;
         }
-
 
         private static int GetConfiguredResonanceMaterialCost(
             EquipResonanceUseItemTable configured,

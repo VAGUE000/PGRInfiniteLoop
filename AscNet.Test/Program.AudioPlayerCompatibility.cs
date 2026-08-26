@@ -3,6 +3,7 @@ using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.GameServer;
 using AscNet.Table.V2.share.miniactivity.musicplayer;
+using AscNet.Table.V2.share.condition;
 using MessagePack;
 using MongoDB.Bson;
 using System.Reflection;
@@ -44,6 +45,15 @@ internal static partial class Program
         int songA = testSongs[0];
         int songB = testSongs[1];
         AssertEqual(true, songA != songB, "Album has two distinct songs");
+        Dictionary<int, ConditionTable> conditions = TableReaderV2.Parse<ConditionTable>()
+            .ToDictionary(row => row.Id);
+        MusicPlayerAlbumTable gatedSong = album.First(row =>
+            row.ConditionId is int conditionId
+            && conditions.TryGetValue(conditionId, out ConditionTable? condition)
+            && condition.Type == 11117
+            && condition.Params.Count > 0);
+        int gatedBackgroundId = conditions[gatedSong.ConditionId!.Value].Params[0];
+
 
         void Invoke(MethodInfo method, Session session, object request)
         {
@@ -67,6 +77,30 @@ internal static partial class Program
             AssertEqual(1, login.BackgroundSongs.Count, "fresh login has default background");
             AssertEqual(defaultId, login.BackgroundSongs[0], "fresh login default background song id");
         }
+        // ---- relogin handoff: persisted order is preserved exactly; default is not injected ----
+        Player reloginPlayer = CreateDrawCompatibilityPlayer(uid + 10);
+        reloginPlayer.BackgroundSongs = [songA, songB];
+        Player reloadedReloginPlayer = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Player>(
+            reloginPlayer.ToBson());
+        using (LoopbackSessionHarness relogin = new(
+            CreateDrawCompatibilityCharacter(uid + 10),
+            reloadedReloginPlayer,
+            CreateDrawCompatibilityInventory(uid + 10, []),
+            "audioplayer-relogin-test"))
+        {
+            relogin.Session.stage = CreateLoginAccountCompatibilityStage(uid + 10);
+            MethodInfo buildNotifyLogin = RequiredMethod(
+                RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule"),
+                "BuildNotifyLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+            NotifyLogin notifyLogin = (NotifyLogin?)buildNotifyLogin.Invoke(null, [relogin.Session])
+                ?? throw new InvalidDataException("AccountModule.BuildNotifyLogin returned nil.");
+            AssertIntegerList([songA, songB],
+                notifyLogin.AudioPlayerLoginData.BackgroundSongs.Select(id => (long)id).ToArray(),
+                "NotifyLogin preserves persisted background song order");
+        }
+
 
         // ---- favorites: add two distinct (ordered most-recent-first), remove one ----
         using (LoopbackSessionHarness h = new(CreateDrawCompatibilityCharacter(uid), CreateDrawCompatibilityPlayer(uid), CreateDrawCompatibilityInventory(uid, []), "audioplayer-fav-test"))
@@ -89,6 +123,48 @@ internal static partial class Program
             AssertEqual(1, h.Session.player.FavoriteSongs.Count, "favorite removed");
             AssertEqual(songB, h.Session.player.FavoriteSongs[0], "remaining favorite");
         }
+        // ---- scene-gated songs: owned background authorizes favorite and playlist persistence ----
+        Player gatedPlayer = CreateDrawCompatibilityPlayer(uid + 20);
+        gatedPlayer.UseBackgroundId = gatedBackgroundId;
+        using (LoopbackSessionHarness gated = new(
+            CreateDrawCompatibilityCharacter(uid + 20),
+            gatedPlayer,
+            CreateDrawCompatibilityInventory(uid + 20, []),
+            "audioplayer-gated-song-test"))
+        {
+            Invoke(addFav, gated.Session, new AddAudioPlayerFavoriteSongRequest { SongId = gatedSong.Id });
+            AssertEqual(0, ReadResponsePayload<AddAudioPlayerFavoriteSongResponse>(
+                gated, 9001, nameof(AddAudioPlayerFavoriteSongResponse),
+                "owned-scene gated favorite response").Code,
+                "owned-scene gated favorite Code");
+            Invoke(addBg, gated.Session, new AddAudioPlayerBackgroundSongRequest { SongIds = [gatedSong.Id] });
+            AssertEqual(0, ReadResponsePayload<AddAudioPlayerBackgroundSongResponse>(
+                gated, 9001, nameof(AddAudioPlayerBackgroundSongResponse),
+                "owned-scene gated background response").Code,
+                "owned-scene gated background Code");
+            Player gatedReload = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Player>(
+                gatedPlayer.ToBson());
+            AssertEqual(true, gatedReload.FavoriteSongs.Contains(gatedSong.Id),
+                "owned-scene gated favorite persists");
+            AssertEqual(true, Login(gatedReload).BackgroundSongs.Contains(gatedSong.Id),
+                "owned-scene gated background persists across relogin");
+        }
+
+        Player unownedGatedPlayer = CreateDrawCompatibilityPlayer(uid + 21);
+        using (LoopbackSessionHarness unownedGated = new(
+            CreateDrawCompatibilityCharacter(uid + 21),
+            unownedGatedPlayer,
+            CreateDrawCompatibilityInventory(uid + 21, []),
+            "audioplayer-unowned-gated-song-test"))
+        {
+            Invoke(addFav, unownedGated.Session,
+                new AddAudioPlayerFavoriteSongRequest { SongId = gatedSong.Id });
+            AssertEqual(true, ReadResponsePayload<AddAudioPlayerFavoriteSongResponse>(
+                unownedGated, 9001, nameof(AddAudioPlayerFavoriteSongResponse),
+                "unowned-scene gated favorite response").Code != 0,
+                "unowned-scene gated favorite rejected");
+        }
+
 
         // ---- backgrounds: ordered add, duplicate skip, remove, reset, cap ----
         using (LoopbackSessionHarness h = new(CreateDrawCompatibilityCharacter(uid), CreateDrawCompatibilityPlayer(uid), CreateDrawCompatibilityInventory(uid, []), "audioplayer-bg-test"))
@@ -120,6 +196,26 @@ internal static partial class Program
             AssertEqual(Math.Min(bgMax, many.Count + 1), h.Session.player.BackgroundSongs.Count,
                 "background list respects configured cap");
         }
+        // ---- removing the final background is rejected and preserves the playlist ----
+        Player finalBackgroundPlayer = CreateDrawCompatibilityPlayer(uid + 30);
+        finalBackgroundPlayer.BackgroundSongs = [songA];
+        using (LoopbackSessionHarness finalBackground = new(
+            CreateDrawCompatibilityCharacter(uid + 30),
+            finalBackgroundPlayer,
+            CreateDrawCompatibilityInventory(uid + 30, []),
+            "audioplayer-final-background-test"))
+        {
+            Invoke(removeBg, finalBackground.Session,
+                new RemoveAudioPlayerBackgroundSongRequest { SongId = songA });
+            AssertEqual(true, ReadResponsePayload<RemoveAudioPlayerBackgroundSongResponse>(
+                finalBackground, 9001, nameof(RemoveAudioPlayerBackgroundSongResponse),
+                "remove final background response").Code != 0,
+                "remove final background rejected");
+            AssertIntegerList([songA],
+                finalBackgroundPlayer.BackgroundSongs.Select(id => (long)id).ToArray(),
+                "remove final background preserves playlist");
+        }
+
 
         // ---- persistence: mutation applied and SaveChecked before Code response ----
         using (LoopbackSessionHarness h = new(CreateDrawCompatibilityCharacter(uid), CreateDrawCompatibilityPlayer(uid), CreateDrawCompatibilityInventory(uid, []), "audioplayer-save-test"))

@@ -11,5 +11,24 @@
     "BaseTeamTime": 1783918800,
     "FightDurationSeconds": 565200,
     "ArenaIndex": 1
+  },
+  "RepeatChallengeEncounter": {
+    "NpcGroups": [
+      [
+        { "NpcId": 91600, "BufferIds": [301104] },
+        { "NpcId": 91600, "BufferIds": [301104] },
+        { "NpcId": 91610, "BufferIds": [301104] },
+        { "NpcId": 91610, "BufferIds": [] }
+      ],
+      [
+        { "NpcId": 91620, "BufferIds": [301104] },
+        { "NpcId": 91610, "BufferIds": [301104] },
+        { "NpcId": 91620, "BufferIds": [301104] },
+        { "NpcId": 93692, "BufferIds": [] }
+      ]
+    ],
+    "SettlementGoods": [
+      { "RewardType": 1, "TemplateId": 62738, "Count": 85 }
+    ]
   }
 }

@@ -1116,6 +1116,17 @@
       ]
     },
     {
+      "columns": 3,
+      "contentSha256": "a9e7c23dd3e081bd86dd81174378d0d7cab55b7f93784b68619ecca7440fb8d7",
+      "filter": "resonance-discount-joined-fields",
+      "naturalKey": "SuitId,ItemId",
+      "path": "share/equip/EquipConfig.tsv",
+      "rows": 1,
+      "source": [
+        "share/equip/EquipConfig.json"
+      ]
+    },
+    {
       "columns": 7,
       "contentSha256": "2cf4eca7b0fdfd6c828c93454e482146194de8b46c1a3dba762f0885928649e4",
       "filter": "all",

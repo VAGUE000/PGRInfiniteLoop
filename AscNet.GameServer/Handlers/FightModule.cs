@@ -546,7 +546,7 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
-            RepeatChallengeModule.ApplyPreFight(session.player, rsp.FightData);
+            RepeatChallengeModule.ApplyPreFight(session.player, rsp.FightData, req.PreFightData.ChallengeCount);
             if (req.PreFightData.SelectAreaId > 0 && !ArenaModule.ApplyPreFight(session, req.PreFightData, rsp))
             {
                 rsp.Code = 20044029;
@@ -2417,6 +2417,7 @@ namespace AscNet.GameServer.Handlers
 
                 rewardTables.AddRange(TableReaderV2.Parse<RewardTable>().Where(x => rewardIds.Contains(x.Id)));
             }
+            RepeatChallengeModule.TryGetSettlementGoods(req.Result.StageId, out List<RewardGoodsTable> repeatChallengeRewards);
 
             NotifyItemDataList notifyItemData = new();
             if (teamExp > 0)
@@ -2426,10 +2427,12 @@ namespace AscNet.GameServer.Handlers
 
             for (int i = 0; i < challengeCount; i++)
             {
-                var rewardGoods = rewardTables
-                    .SelectMany(x => x.SubIds)
-                    .Select(x => TableReaderV2.Parse<RewardGoodsTable>().FirstOrDefault(y => y.Id == x))
-                    .OfType<RewardGoodsTable>();
+                IEnumerable<RewardGoodsTable> rewardGoods = repeatChallengeRewards.Count > 0
+                    ? repeatChallengeRewards
+                    : rewardTables
+                        .SelectMany(x => x.SubIds)
+                        .Select(x => TableReaderV2.Parse<RewardGoodsTable>().FirstOrDefault(y => y.Id == x))
+                        .OfType<RewardGoodsTable>();
 
                 if (deferredRewardApplications is not null)
                 {

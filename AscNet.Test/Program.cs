@@ -112,6 +112,11 @@ namespace AscNet.Test
                     ValidateCharacterEnhanceSkillTableBackedCompatibility();
                     return;
                 }
+                if (args.Contains("--version-47-memory-compat-only"))
+                {
+                    ValidateVersion47MemoryCompatibility();
+                    return;
+                }
                 if (args.Contains("--version-47-character-compat-only"))
                 {
                     ValidateVersion47CharacterCompatibility();
@@ -700,6 +705,7 @@ namespace AscNet.Test
                 ValidateFightSettleAchievementCompatibility();
                 ValidatePr2QualityCompatibility();
                 ValidateInventoryEquipCompatibility();
+                ValidateVersion47MemoryCompatibility();
                 ValidateEquipDecomposeCompatibility();
                 ValidateEquipChipRecycleCompatibility();
                 ValidateDrawCompatibility();
@@ -17516,7 +17522,7 @@ namespace AscNet.Test
                 .Order()
                 .ToArray();
             AssertIntegerList(
-                Enumerable.Range(32_002, 18).Select(id => (long)id).ToArray(),
+                Enumerable.Range(32_002, 20).Select(id => (long)id).ToArray(),
                 leapWaferIds,
                 "Leap Shop reward item ids");
             foreach (long leapWaferId in leapWaferIds)
@@ -27051,7 +27057,7 @@ namespace AscNet.Test
                 {
                     PreFightData = new PreFightRequest.PreFightRequestPreFightData
                     {
-                        ChallengeCount = 1,
+                        ChallengeCount = 2,
                         StageId = 30_090_802,
                         CardIds = [1_021_001],
                         RobotIds = []
@@ -27068,6 +27074,18 @@ namespace AscNet.Test
             if (!repeatChallengePreFight.FightData.MonsterLevel.SequenceEqual([357, 252, 197]))
                 throw new InvalidDataException($"Simulated Battlefield PreFightResponse MonsterLevel: expected 357,252,197, got {string.Join(",", repeatChallengePreFight.FightData.MonsterLevel)}.");
             AssertEqual(51201, Convert.ToInt32(repeatChallengePreFight.FightData.EventIds.Single()), "Simulated Battlefield Authority Level 1 effect");
+            AssertEqual("2", repeatChallengePreFight.FightData.CustomData, "Simulated Battlefield two-attempt wave count");
+            JArray battlefieldNpcGroups = JArray.FromObject(repeatChallengePreFight.FightData.NpcGroupList);
+            AssertEqual(2, battlefieldNpcGroups.Count, "Simulated Battlefield wave count");
+            AssertIntegerList(
+                [91_600, 91_600, 91_610, 91_610, 91_620, 91_610, 91_620, 93_692],
+                battlefieldNpcGroups.SelectMany(group => group["NpcList"]!).Select(npc => npc.Value<long>("NpcId")).ToArray(),
+                "Simulated Battlefield ordered wave NPCs");
+            AssertIntegerList(
+                Enumerable.Repeat(301_104L, 6).ToArray(),
+                battlefieldNpcGroups.SelectMany(group => group["NpcList"]!)
+                    .SelectMany(npc => npc["BufferIds"]!.Values<long>()).ToArray(),
+                "Simulated Battlefield NPC buffers");
 
             const int repeatChallengeSettlePacketId = 81_006;
             InvokeRegisteredRequestHandler(
@@ -27100,18 +27118,22 @@ namespace AscNet.Test
                 repeatSettleResponse = MessagePackSerializer.Deserialize<FightSettleResponse>(response.Content);
             }
             AssertEqual(0, repeatSettleResponse?.Code ?? -1, "Simulated Battlefield FightSettleResponse Code");
-            AssertEqual(50, repeatExpChange?.ExpInfo.Exp ?? -1, "Simulated Battlefield settle EXP push");
+            AssertEqual(100, repeatExpChange?.ExpInfo.Exp ?? -1, "Simulated Battlefield settle EXP push");
+            List<List<RewardGoods>> battlefieldRewards = repeatSettleResponse?.Settle.MultiRewardGoodsList
+                ?? throw new InvalidDataException("Simulated Battlefield settlement rewards are nil.");
+            AssertEqual(2, battlefieldRewards.Count, "Simulated Battlefield settlement reward groups");
+            foreach (List<RewardGoods> clearRewards in battlefieldRewards)
+            {
+                RewardGoods reward = clearRewards.Single();
+                AssertEqual(62_738, reward.TemplateId, "Simulated Battlefield settlement currency");
+                AssertEqual(85, reward.Count, "Simulated Battlefield settlement currency amount");
+            }
 
             MethodInfo recordRepeatChallengeStageClear = RequiredMethod(
                 repeatChallengeModule,
                 "RecordStageClear",
                 BindingFlags.Static | BindingFlags.Public,
                 [typeof(AscNet.Common.Database.Player), typeof(uint), typeof(int)]);
-            AssertEqual(
-                true,
-                (bool)(recordRepeatChallengeStageClear.Invoke(null, [player, 30_090_802U, 1])
-                    ?? throw new InvalidDataException("RepeatChallengeModule.RecordStageClear returned nil.")),
-                "Simulated Battlefield repeat challenge second clear progression");
             NotifyRepeatChallengeData progressedRepeatChallengeLogin = buildRepeatChallengeLoginData.Invoke(null, [player]) as NotifyRepeatChallengeData
                 ?? throw new InvalidDataException("RepeatChallengeModule.BuildLoginData returned nil after stage clear.");
             AssertEqual(2, progressedRepeatChallengeLogin.ExpInfo.Level, "Simulated Battlefield progressed Authority Level");
@@ -27134,7 +27156,32 @@ namespace AscNet.Test
                 nameof(GetShopInfoResponse),
                 "Simulated Battlefield shop response");
             AssertEqual(0, battlefieldShop.Code, "Simulated Battlefield shop response Code");
-            AssertEqual(19, battlefieldShop.ClientShop.GoodsList.Count, "Simulated Battlefield shop goods count");
+            AssertIntegerList(
+                Enumerable.Range(147_072, 17).Select(id => (long)id).ToArray(),
+                battlefieldShop.ClientShop.GoodsList.Select(goods => (long)goods.Id).ToArray(),
+                "Simulated Battlefield shop goods");
+            foreach ((uint shopId, int goodsCount, uint firstGoodsId, uint lastGoodsId) in new[]
+            {
+                (1_422U, 17, 142_030U, 143_341U),
+                (1_423U, 372, 142_045U, 147_049U)
+            })
+            {
+                int packetId = checked(81_000 + (int)shopId);
+                InvokeRegisteredRequestHandler(
+                    nameof(GetShopInfoRequest),
+                    harness.Session,
+                    packetId,
+                    new GetShopInfoRequest { Id = shopId });
+                GetShopInfoResponse shop = ReadResponsePayload<GetShopInfoResponse>(
+                    harness,
+                    packetId,
+                    nameof(GetShopInfoResponse),
+                    $"Simulated Battlefield shop {shopId} response");
+                AssertEqual(0, shop.Code, $"Simulated Battlefield shop {shopId} Code");
+                AssertEqual(goodsCount, shop.ClientShop.GoodsList.Count, $"Simulated Battlefield shop {shopId} goods count");
+                AssertEqual(firstGoodsId, shop.ClientShop.GoodsList.First().Id, $"Simulated Battlefield shop {shopId} first goods");
+                AssertEqual(lastGoodsId, shop.ClientShop.GoodsList.Last().Id, $"Simulated Battlefield shop {shopId} last goods");
+            }
             GetShopInfoResponse.GetShopInfoResponseClientShop.GetShopInfoResponseClientShopGoods battlefieldGoods =
                 battlefieldShop.ClientShop.GoodsList.First();
             GetShopInfoResponse.GetShopInfoResponseClientShop.GetShopInfoResponseClientShopGoods.GetShopInfoResponseClientShopGoodsConsume battlefieldCost =
@@ -27188,6 +27235,11 @@ namespace AscNet.Test
             int[] progressedEventIds = progressedPreFight.FightData.EventIds.Select(Convert.ToInt32).ToArray();
             if (!progressedEventIds.SequenceEqual([51201, 51202]))
                 throw new InvalidDataException($"Simulated Battlefield Authority Level 2 effects: expected 51201,51202, got {string.Join(",", progressedEventIds)}.");
+            AssertEqual("1", progressedPreFight.FightData.CustomData, "Simulated Battlefield single-attempt wave count");
+            AssertEqual(
+                true,
+                JToken.DeepEquals(battlefieldNpcGroups, JArray.FromObject(progressedPreFight.FightData.NpcGroupList)),
+                "Simulated Battlefield waves remain stable across Authority progression");
 
             recordRepeatChallengeStageClear.Invoke(null, [player, 30_090_802U, 200]);
             NotifyRepeatChallengeData cappedRepeatChallengeLogin = buildRepeatChallengeLoginData.Invoke(null, [player]) as NotifyRepeatChallengeData

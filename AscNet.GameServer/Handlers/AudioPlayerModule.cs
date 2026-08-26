@@ -2,6 +2,8 @@ using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.miniactivity.musicplayer;
+using AscNet.Table.V2.share.condition;
+using AscNet.Table.V2.share.photomode;
 using MessagePack;
 
 namespace AscNet.GameServer.Handlers
@@ -21,12 +23,15 @@ namespace AscNet.GameServer.Handlers
             TableReaderV2.Parse<MusicPlayerConfigTable>()
                 .ToDictionary(row => row.Key, row => row.Values));
 
-        // Ungated songs only: non-zero ConditionId marks event/milestone-scene-gated songs with
-        // no ownership source here, so they are excluded (never silently granted).
-        private static readonly Lazy<HashSet<int>> ValidSongIds = new(() =>
-            new HashSet<int>(TableReaderV2.Parse<MusicPlayerAlbumTable>()
-                .Where(row => row.ConditionId is null || row.ConditionId == 0)
-                .Select(row => row.Id)));
+        private static readonly Lazy<IReadOnlyDictionary<int, MusicPlayerAlbumTable>> Albums = new(() =>
+            TableReaderV2.Parse<MusicPlayerAlbumTable>().ToDictionary(row => row.Id));
+        private static readonly Lazy<IReadOnlyDictionary<int, ConditionTable>> Conditions = new(() =>
+            TableReaderV2.Parse<ConditionTable>().ToDictionary(row => row.Id));
+        private static readonly Lazy<HashSet<int>> FreeBackgroundIds = new(() =>
+            TableReaderV2.Parse<BackgroundTable>()
+                .Where(background => background.IsFree > 0)
+                .Select(background => background.Id)
+                .ToHashSet());
 
         private static int Config(string key)
             => ConfigByName.Value.TryGetValue(key, out int value) ? value : 0;
@@ -41,25 +46,37 @@ namespace AscNet.GameServer.Handlers
             {
                 int id = Config("DefaultBackgroundSongId");
                 // Fall back to a stable default if the table is missing so login never breaks.
-                return ValidSongIds.Value.Contains(id) ? id : 1;
+                return Albums.Value.ContainsKey(id) ? id : 1;
             }
         }
 
-        /// <summary>True when the id is an ungated album song (or the default). Scene-gated songs
-        /// (non-zero ConditionId) are excluded because no ownership source exists here.</summary>
-        internal static bool IsValidSongId(int songId)
-            => ValidSongIds.Value.Contains(songId) || songId == DefaultBackgroundSongId;
+        internal static bool IsValidSongId(Player player, int songId)
+        {
+            if (songId == DefaultBackgroundSongId)
+                return true;
+            if (!Albums.Value.TryGetValue(songId, out MusicPlayerAlbumTable? album))
+                return false;
+            if (album.ConditionId is null or 0)
+                return true;
+            if (!Conditions.Value.TryGetValue(album.ConditionId.Value, out ConditionTable? condition)
+                || condition.Type != 11117
+                || condition.Params.Count < 1)
+            {
+                return false;
+            }
+
+            int backgroundId = condition.Params[0];
+            return player.UseBackgroundId == backgroundId
+                || player.OwnedBackgroundIds?.Contains(backgroundId) == true
+                || FreeBackgroundIds.Value.Contains(backgroundId);
+        }
 
         /// <summary>Builds the durable login payload from player state, seeding the default background song.</summary>
         internal static AudioPlayerLoginData BuildLoginData(Player player)
         {
-            List<int> background = player.BackgroundSongs ?? new();
-            int defaultId = DefaultBackgroundSongId;
-            if (!background.Contains(defaultId))
-            {
-                background = background.Prepend(defaultId).ToList();
-                player.BackgroundSongs = background;
-            }
+            List<int> background = player.BackgroundSongs ??= new();
+            if (background.Count == 0)
+                background.Add(DefaultBackgroundSongId);
             return new AudioPlayerLoginData
             {
                 FavoriteSongs = player.FavoriteSongs ?? new(),
@@ -86,7 +103,7 @@ namespace AscNet.GameServer.Handlers
         {
             var request = MessagePackSerializer.Deserialize<AddAudioPlayerFavoriteSongRequest>(packet.Content);
             var response = new AddAudioPlayerFavoriteSongResponse();
-            if (!IsValidSongId(request.SongId))
+            if (!IsValidSongId(session.player, request.SongId))
             {
                 response.Code = ErrorCode;
                 session.SendResponse(response, packet.Id);
@@ -125,13 +142,19 @@ namespace AscNet.GameServer.Handlers
         {
             var request = MessagePackSerializer.Deserialize<AddAudioPlayerBackgroundSongRequest>(packet.Content);
             var response = new AddAudioPlayerBackgroundSongResponse();
+            if (request.SongIds is null || request.SongIds.Any(songId => !IsValidSongId(session.player, songId)))
+            {
+                response.Code = ErrorCode;
+                session.SendResponse(response, packet.Id);
+                return;
+            }
             List<int> songs = session.player.BackgroundSongs ??= new();
             List<int> previous = songs.ToList();
             bool mutated = false;
             int max = BackgroundMaxCount;
             foreach (int songId in request.SongIds)
             {
-                if (!IsValidSongId(songId) || songs.Contains(songId))
+                if (songs.Contains(songId))
                     continue;
                 songs.Insert(0, songId);
                 mutated = true;
@@ -149,11 +172,15 @@ namespace AscNet.GameServer.Handlers
             var request = MessagePackSerializer.Deserialize<RemoveAudioPlayerBackgroundSongRequest>(packet.Content);
             var response = new RemoveAudioPlayerBackgroundSongResponse();
             List<int> songs = session.player.BackgroundSongs ??= new();
+            if (songs.Count == 1 && songs.Contains(request.SongId))
+            {
+                response.Code = ErrorCode;
+                session.SendResponse(response, packet.Id);
+                return;
+            }
+
             List<int> previous = songs.ToList();
-            _ = songs.Remove(request.SongId);
-            if (songs.Count == 0)
-                songs.Add(DefaultBackgroundSongId);
-            if (!songs.SequenceEqual(previous))
+            if (songs.Remove(request.SongId))
                 response.Code = TrySave(session.player, songs, previous) ? SuccessCode : ErrorCode;
             session.SendResponse(response, packet.Id);
         }
