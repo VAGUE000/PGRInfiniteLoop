@@ -144,8 +144,8 @@ def generate(source: Path) -> dict[str, bytes]:
                 f"boss {boss_id}: NpcId, NpcLevel, and StageBuffId must have equal non-zero lengths")
         normalized_monsters.append((
             boss_id,
-            integer(row, "TimeId", default=0),
-            integer(row, "ImpasseTimeId", default=0),
+            integer(row, "TimeId"),
+            integer(row, "ImpasseTimeId"),
             stage_id,
             npc_ids,
             npc_levels,

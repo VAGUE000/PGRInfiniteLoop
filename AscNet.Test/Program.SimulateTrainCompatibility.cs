@@ -29,6 +29,14 @@ internal partial class Program
         AssertEqual(0, ronin.ImpasseTimeId, "SimulateTrain Ronin ImpasseTimeId");
         AssertEqual(true, ActivityScheduleService.IsOpen(ronin.TimeId, DateTimeOffset.UtcNow),
             "SimulateTrain permanent practice schedule is open");
+        foreach (int timeId in bosses
+                     .SelectMany(boss => new[] { boss.TimeId, boss.ImpasseTimeId })
+                     .Where(timeId => timeId > 0)
+                     .Distinct())
+        {
+            AssertEqual(true, ActivityScheduleService.TryGet(timeId, out _),
+                $"SimulateTrain TimeId {timeId} has an authoritative schedule");
+        }
         List<SimulateTrainPeriodBuffTable> periodBuffs =
             TableReaderV2.Parse<SimulateTrainPeriodBuffTable>();
         AssertEqual(22, periodBuffs.Count, "SimulateTrain period buff row count");
@@ -63,13 +71,15 @@ internal partial class Program
             [
                 typeof(PreFightRequest.PreFightRequestPreFightData),
                 typeof(PreFightResponse.PreFightResponseFightData),
+                typeof(DateTimeOffset),
                 typeof(int).MakeByRefType()
             ]);
+        DateTimeOffset allSchedulesOpenAt = DateTimeOffset.FromUnixTimeSeconds(1_742_983_200);
         PreFightResponse.PreFightResponseFightData fightData = new() { StageId = request.PreFightData.StageId };
-        object?[] preFightArguments = [request.PreFightData, fightData, 0];
+        object?[] preFightArguments = [request.PreFightData, fightData, allSchedulesOpenAt, 0];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, preFightArguments) ?? false),
             "SimulateTrain pre-fight is recognized");
-        AssertEqual(0, (int)(preFightArguments[2] ?? -1),
+        AssertEqual(0, (int)(preFightArguments[3] ?? -1),
             "SimulateTrain pre-fight is accepted");
         AssertEqual<List<int>?>(null, fightData.MonsterLevel,
             "SimulateTrain uses explicit NPC group instead of top-level monster levels");
@@ -107,10 +117,10 @@ internal partial class Program
         PreFightResponse.PreFightResponseFightData officialCaptureFightData =
             new() { StageId = officialCaptureRequest.PreFightData.StageId };
         object?[] officialCaptureArguments =
-            [officialCaptureRequest.PreFightData, officialCaptureFightData, 0];
+            [officialCaptureRequest.PreFightData, officialCaptureFightData, allSchedulesOpenAt, 0];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, officialCaptureArguments) ?? false),
             "Official captured SimulateTrain pre-fight is recognized");
-        AssertEqual(0, (int)(officialCaptureArguments[2] ?? -1),
+        AssertEqual(0, (int)(officialCaptureArguments[3] ?? -1),
             "Official captured SimulateTrain pre-fight is accepted");
         JObject officialWire = JObject.Parse(MessagePackSerializer.ConvertToJson(
             MessagePackSerializer.Serialize(new PreFightResponse
@@ -140,51 +150,95 @@ internal partial class Program
         [
             request.PreFightData,
             new PreFightResponse.PreFightResponseFightData { StageId = request.PreFightData.StageId },
+            allSchedulesOpenAt,
             0
         ];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, unsupportedPeriodArguments) ?? false),
             "SimulateTrain unsupported period is recognized");
-        AssertEqual(true, (int)(unsupportedPeriodArguments[2] ?? 0) != 0,
+        AssertEqual(true, (int)(unsupportedPeriodArguments[3] ?? 0) != 0,
             "SimulateTrain unsupported period is rejected");
         request.PreFightData.SimulateTrainInfo.Period = 1;
 
-        SimulateTrainMonsterTable timeGatedBoss = bosses.Single(boss => boss.Id == 3_066);
-        PreFightRequest timeGatedRequest = new()
+        int PreFightCodeAt(SimulateTrainMonsterTable boss, DateTimeOffset now, int difficulty = 1)
         {
-            PreFightData = new()
+            PreFightRequest preFight = new()
             {
-                StageId = checked((uint)timeGatedBoss.StageId),
-                SimulateTrainInfo = new()
+                PreFightData = new()
                 {
-                    BossId = timeGatedBoss.Id,
-                    Period = 1,
-                    AtkLevel = 2,
-                    HpLevel = 1,
-                    Difficulty = 1,
+                    StageId = checked((uint)boss.StageId),
+                    SimulateTrainInfo = new()
+                    {
+                        BossId = boss.Id,
+                        Period = 1,
+                        AtkLevel = 2,
+                        HpLevel = 1,
+                        Difficulty = difficulty,
+                    }
                 }
+            };
+            object?[] arguments =
+            [
+                preFight.PreFightData,
+                new PreFightResponse.PreFightResponseFightData { StageId = preFight.PreFightData.StageId },
+                now,
+                0
+            ];
+            AssertEqual(true, (bool)(applyPreFight.Invoke(null, arguments) ?? false),
+                $"SimulateTrain boss {boss.Id} schedule check is recognized");
+            return (int)(arguments[3] ?? -1);
+        }
+
+        const long shorthaltStartTime = 1_742_810_400;
+        const long vonnegutStartTime = 1_742_983_200;
+        SimulateTrainMonsterTable shorthalt = bosses.Single(boss => boss.Id == 3_065);
+        SimulateTrainMonsterTable vonnegut = bosses.Single(boss => boss.Id == 3_066);
+        AssertEqual(36_303, shorthalt.TimeId, "SimulateTrain Shorthalt TimeId");
+        AssertEqual(36_303, shorthalt.ImpasseTimeId, "SimulateTrain Shorthalt ImpasseTimeId");
+        AssertEqual(36_304, vonnegut.TimeId, "SimulateTrain Vonnegut TimeId");
+        AssertEqual(36_304, vonnegut.ImpasseTimeId, "SimulateTrain Vonnegut ImpasseTimeId");
+        AssertEqual(true,
+            ActivityScheduleService.TryGet(shorthalt.TimeId, out ActivityScheduleEntry shorthaltSchedule),
+            "SimulateTrain Shorthalt schedule is configured");
+        AssertEqual(true,
+            ActivityScheduleService.TryGet(vonnegut.TimeId, out ActivityScheduleEntry vonnegutSchedule),
+            "SimulateTrain Vonnegut schedule is configured");
+        AssertEqual(shorthaltStartTime, shorthaltSchedule.StartTime,
+            "SimulateTrain Shorthalt authoritative start time");
+        AssertEqual(vonnegutStartTime, vonnegutSchedule.StartTime,
+            "SimulateTrain Vonnegut authoritative start time");
+
+        DateTimeOffset shorthaltStart = DateTimeOffset.FromUnixTimeSeconds(shorthaltStartTime);
+        AssertEqual(20_003_024, PreFightCodeAt(shorthalt, shorthaltStart.AddSeconds(-1)),
+            "SimulateTrain Shorthalt is locked before its schedule");
+        AssertEqual(0, PreFightCodeAt(shorthalt, shorthaltStart),
+            "SimulateTrain Shorthalt opens at its scheduled start");
+        AssertEqual(20_003_024, PreFightCodeAt(vonnegut, shorthaltStart),
+            "SimulateTrain Vonnegut remains locked during Shorthalt's window");
+        AssertEqual(0, PreFightCodeAt(vonnegut, DateTimeOffset.FromUnixTimeSeconds(vonnegutStartTime)),
+            "SimulateTrain Vonnegut opens at its scheduled start");
+        foreach (SimulateTrainMonsterTable boss in bosses)
+        {
+            AssertEqual(0, PreFightCodeAt(boss, allSchedulesOpenAt),
+                $"SimulateTrain boss {boss.Id} base difficulty opens after its schedule");
+            if (boss.ImpasseTimeId > 0)
+            {
+                AssertEqual(0, PreFightCodeAt(boss, allSchedulesOpenAt, boss.NpcId.Count),
+                    $"SimulateTrain boss {boss.Id} Impasse difficulty opens after its schedule");
             }
-        };
-        object?[] timeGatedArguments =
-        [
-            timeGatedRequest.PreFightData,
-            new PreFightResponse.PreFightResponseFightData { StageId = timeGatedRequest.PreFightData.StageId },
-            0
-        ];
-        AssertEqual(true, (bool)(applyPreFight.Invoke(null, timeGatedArguments) ?? false),
-            "SimulateTrain time-gated boss is recognized");
-        AssertEqual(20_003_024, (int)(timeGatedArguments[2] ?? 0),
-            "SimulateTrain closed boss schedule is rejected");
+        }
+
 
         request.PreFightData.SimulateTrainInfo!.BossId = 9_999;
         object?[] invalidPreFightArguments =
         [
             request.PreFightData,
             new PreFightResponse.PreFightResponseFightData { StageId = request.PreFightData.StageId },
+            allSchedulesOpenAt,
             0
         ];
         AssertEqual(true, (bool)(applyPreFight.Invoke(null, invalidPreFightArguments) ?? false),
             "SimulateTrain invalid pre-fight is recognized");
-        AssertEqual(true, (int)(invalidPreFightArguments[2] ?? 0) != 0,
+        AssertEqual(true, (int)(invalidPreFightArguments[3] ?? 0) != 0,
             "SimulateTrain mismatched boss is rejected");
         request.PreFightData.SimulateTrainInfo.BossId = 2_001;
 

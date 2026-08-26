@@ -1931,6 +1931,50 @@
       ]
     },
     {
+      "columns": 2,
+      "contentSha256": "cb3af579d7e0613be446b054c55b2ef2a793706aa4fcd2faddbd4ffb5f6096da",
+      "filter": "all",
+      "naturalKey": "AtkLevel",
+      "path": "share/fuben/simulatetrain/SimulateTrainAtk.tsv",
+      "rows": 6,
+      "source": [
+        "share/fuben/simulatetrain/SimulateTrainAtk.json"
+      ]
+    },
+    {
+      "columns": 2,
+      "contentSha256": "e7f8dffd7eeb690e056feb1c68ad9ceff6286627dba44318fc03f8b37b02d351",
+      "filter": "all",
+      "naturalKey": "HpLevel",
+      "path": "share/fuben/simulatetrain/SimulateTrainHp.tsv",
+      "rows": 6,
+      "source": [
+        "share/fuben/simulatetrain/SimulateTrainHp.json"
+      ]
+    },
+    {
+      "columns": 16,
+      "contentSha256": "afc94bfe6215e9d050100297769dbbb45edee2a3ed468f8f904b483b1140be88",
+      "filter": "runtime-required-fields-preserving-authoritative-schedules",
+      "naturalKey": "Id",
+      "path": "share/fuben/simulatetrain/SimulateTrainMonster.tsv",
+      "rows": 76,
+      "source": [
+        "share/fuben/simulatetrain/SimulateTrainMonster.json"
+      ]
+    },
+    {
+      "columns": 3,
+      "contentSha256": "5a05f66dc3e1697997d8eb144fe78081f7eeb0fbcd3edf97995d31057710f52a",
+      "filter": "derived-nonzero-period-buffs",
+      "naturalKey": "BossId,Period",
+      "path": "share/fuben/simulatetrain/SimulateTrainPeriodBuff.tsv",
+      "rows": 22,
+      "source": [
+        "share/fuben/simulatetrain/SimulateTrainMonster.json"
+      ]
+    },
+    {
       "columns": 39,
       "contentSha256": "0678fab4dbf984656e308f3d10682b6153fb0cd69cfaf0b81ddaf83dd412c1d6",
       "filter": "all",
@@ -3546,11 +3590,11 @@
     },
     {
       "columns": 4,
-      "contentSha256": "cbd78d683de651a9440f9ebe9bdcde53bcdfc50d16cb3567aa4c55b40d97a827",
-      "filter": "official-notice-feature-window-version-history-and-regional-client-entry-derived",
+      "contentSha256": "72289e51497cd1f223ac3f21136234aa216e143312233f89bf1f497428ea13af",
+      "filter": "official-notice-feature-window-version-history-regional-client-entry-retail-login-and-permanent-practice-derived",
       "naturalKey": "Id",
       "path": "share/activity/ActivitySchedule.tsv",
-      "rows": 34,
+      "rows": 47,
       "source": [
         "share/activity/EventCatalog.tsv",
         "Resources/Configs/Notices/4.7.0/{GameNotice,LoginNotice}.json",
@@ -3562,7 +3606,9 @@
         "client/theatre6/Theatre6ClientConfig.json",
         "share/item/Item.json",
         "share/miniactivity/musicgame/concertpreheating/ConcertPreHeatingActivity.json",
-        "share/signin/SignIn.json"
+        "share/signin/SignIn.json",
+        "retail NotifyLogin capture:0639@9301a037c5476c67b1d2792bfb6f2d62ffabbfaf",
+        "SimulateTrain permanent practice:TimeId=201"
       ]
     }
   ],

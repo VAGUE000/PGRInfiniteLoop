@@ -493,7 +493,7 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
-            if (SimulateTrainModule.TryApplyPreFight(req.PreFightData, rsp.FightData, out int simulateTrainCode)
+            if (SimulateTrainModule.TryApplyPreFight(req.PreFightData, rsp.FightData, DateTimeOffset.UtcNow, out int simulateTrainCode)
                 && simulateTrainCode != 0)
             {
                 rsp.Code = simulateTrainCode;

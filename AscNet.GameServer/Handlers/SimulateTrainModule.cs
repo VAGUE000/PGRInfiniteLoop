@@ -35,6 +35,7 @@ public sealed class SimulateTrainNpcData
 internal static class SimulateTrainModule
 {
     private const int FightFramesPerSecond = 20;
+    private const int InvalidPreFightData = 1; // Retail code unobserved; any non-zero rejects the request.
 
     private sealed record Data(
         IReadOnlyDictionary<uint, SimulateTrainMonsterTable> MonstersByStage,
@@ -49,6 +50,7 @@ internal static class SimulateTrainModule
     public static bool TryApplyPreFight(
         PreFightRequest.PreFightRequestPreFightData request,
         PreFightResponse.PreFightResponseFightData fightData,
+        DateTimeOffset now,
         out int code)
     {
         code = 0;
@@ -66,7 +68,7 @@ internal static class SimulateTrainModule
             || !Runtime.Value.AttackLevels.TryGetValue(info.AtkLevel, out SimulateTrainAtkTable? attack)
             || !Runtime.Value.HealthLevels.TryGetValue(info.HpLevel, out SimulateTrainHpTable? health))
         {
-            code = 1;
+            code = InvalidPreFightData;
             return true;
         }
 
@@ -75,11 +77,10 @@ internal static class SimulateTrainModule
             out int periodBuffId);
         if (info.Period < 1 || (info.Period > 1 && !hasPeriodBuff))
         {
-            code = 1;
+            code = InvalidPreFightData;
             return true;
         }
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
         bool isImpasseDifficulty = monster.ImpasseTimeId > 0
             && difficultyIndex == monster.NpcId.Count - 1;
         if (!IsTimeOpen(monster.TimeId, now)
