@@ -1825,6 +1825,13 @@ namespace AscNet.Common.MsgPack
     }
 
     [global::MessagePack.MessagePackObject(true)]
+    public class NotifyPassportAutoGetTaskReward
+    {
+        public Int32 ActivityId { get; set; }
+        public List<PassportRewardGoods> RewardList { get; set; } = new();
+    }
+
+    [global::MessagePack.MessagePackObject(true)]
     public class NotifyPassportData
     {
         public Int32 ActivityId { get; set; }

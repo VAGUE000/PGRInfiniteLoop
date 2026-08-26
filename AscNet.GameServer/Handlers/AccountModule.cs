@@ -24,6 +24,7 @@ using AscNet.Table.V2.share.fuben.teaching;
 using AscNet.Table.V2.share.newactivitycalendar;
 using AscNet.Table.V2.share.photomode;
 using MessagePack;
+using AscNet.Table.V2.share.passport;
 using System.Diagnostics;
 
 namespace AscNet.GameServer.Handlers
@@ -551,6 +552,33 @@ namespace AscNet.GameServer.Handlers
             {
                 if (id > 0)
                     controls.TryAdd(id, MakeTimeLimitControl(id, startTime, endTime));
+            }
+
+            foreach (PassportActivityTable passport in TableReaderV2.Parse<PassportActivityTable>()
+                .Where(activity => activity.TimeId is > 0
+                    && ActivityScheduleService.TryGet(activity.TimeId.Value, out ActivityScheduleEntry schedule)
+                    && schedule.IsOpen(now)))
+            {
+                ActivityScheduleService.TryGet(passport.TimeId!.Value, out ActivityScheduleEntry schedule);
+                PassportTaskGroupTable[] rounds = TableReaderV2.Parse<PassportTaskGroupTable>()
+                    .Where(group => group.Group == passport.WeekTaskGroup
+                        && group.Type == 2
+                        && group.TimeId is > 0)
+                    .OrderBy(group => group.TimeId)
+                    .ToArray();
+                long firstWeeklyReset = checked(schedule.StartTime
+                    + TaskModule.RemainingSecondsInWeeklyResetPeriod(schedule.StartTime));
+                for (int index = 0; index < rounds.Length; index++)
+                {
+                    long start = index == 0
+                        ? schedule.StartTime
+                        : checked(firstWeeklyReset + (index - 1) * 604_800L);
+                    long nextStart = checked(firstWeeklyReset + index * 604_800L);
+                    long end = index == rounds.Length - 1 && schedule.EndTime != 0
+                        ? schedule.EndTime - 60
+                        : nextStart - 60;
+                    AddDerived(rounds[index].TimeId!.Value, start, end);
+                }
             }
 
 
@@ -1247,6 +1275,7 @@ namespace AscNet.GameServer.Handlers
                 UnlockEmojis = TableReaderV2.Parse<EmojiTable>().Select(x => new NotifyChatLoginData.NotifyChatLoginDataUnlockEmoji() { Id = (uint)x.Id }).ToList()
             };
 
+            PassportModule.PrepareLogin(session);
             NotifyTaskData notifyTaskData = new()
             {
                 TaskData = new()
@@ -1430,9 +1459,7 @@ namespace AscNet.GameServer.Handlers
             SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostSubModesB);
             SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostSubModesC);
             SendEmptyStartupPush(session, "NotifyReviewConfig");
-            NotifyPassportData passportData = PassportModule.BuildNotifyPassportData(session.player, session.inventory);
-            if (passportData.ActivityId > 0)
-                session.SendPush(passportData);
+            PassportModule.ReconcileAndPushLogin(session);
             SendEmptyStartupPush(session, "NotifyMentorData");
             SendEmptyStartupPush(session, "NotifyMentorChat");
             SendEmptyStartupPush(session, "NotifyGuildData");

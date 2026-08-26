@@ -1,10 +1,11 @@
-﻿using AscNet.Common.Database;
+using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.GameServer.Game;
 using AscNet.Table.V2.share.task;
 using AscNet.Table.V2.share.fuben.transfinite;
 using AscNet.Table.V2.share.reward;
+using AscNet.Table.V2.share.passport;
 using AscNet.Table.V2.share.equip;
 using MessagePack;
 using LoginTask = AscNet.Common.MsgPack.NotifyTaskData.NotifyTaskDataTaskData.NotifyTaskDataTaskDataTask;
@@ -126,7 +127,7 @@ namespace AscNet.GameServer.Handlers
         public static void FinishTaskRequestHandler(Session session, Packet.Request packet)
         {
             FinishTaskRequest request = MessagePackSerializer.Deserialize<FinishTaskRequest>(packet.Content);
-            FinishTaskResponse response = ClaimTaskReward(session, request.TaskId, pushSync: false, out RewardApplicationResult? transfiniteApplication);
+            FinishTaskResponse response = ClaimTaskReward(session, request.TaskId, pushSync: false, out RewardApplicationResult? transfiniteApplication, out RewardApplicationResult? passportApplication);
             if (IsTransfiniteTask(session, request.TaskId))
             {
                 SendTransfiniteTaskSync(session, TransfiniteTasks(session).Where(task => task.Id == request.TaskId));
@@ -135,6 +136,7 @@ namespace AscNet.GameServer.Handlers
             else if (CurrentTaskIds.Value.Contains(request.TaskId))
             {
                 SendCurrentTaskBatch(session, [request.TaskId]);
+                SendPassportConditionTypeSync(session, 11203);
             }
             else if (IsDormTask(request.TaskId))
             {
@@ -144,6 +146,7 @@ namespace AscNet.GameServer.Handlers
             {
                 SendTaskSync(session);
             }
+            passportApplication?.SendPushes(session);
             session.SendResponse(response, packet.Id);
         }
 
@@ -157,12 +160,17 @@ namespace AscNet.GameServer.Handlers
             };
 
             List<RewardApplicationResult> transfiniteApplications = [];
+            List<RewardApplicationResult> passportApplications = [];
             foreach (int taskId in request.TaskIds.Distinct())
             {
-                FinishTaskResponse taskResponse = ClaimTaskReward(session, taskId, pushSync: false, out RewardApplicationResult? transfiniteApplication);
+                FinishTaskResponse taskResponse = ClaimTaskReward(session, taskId, pushSync: false, out RewardApplicationResult? transfiniteApplication, out RewardApplicationResult? passportApplication);
                 if (transfiniteApplication is not null)
                 {
                     transfiniteApplications.Add(transfiniteApplication);
+                }
+                if (passportApplication is not null)
+                {
+                    passportApplications.Add(passportApplication);
                 }
                 if (taskResponse.Code == 0)
                 {
@@ -183,6 +191,7 @@ namespace AscNet.GameServer.Handlers
             if (requestedCurrentTaskIds.Length > 0)
             {
                 SendCurrentTaskBatch(session, requestedCurrentTaskIds);
+                SendPassportConditionTypeSync(session, 11203);
             }
             if (requestedDormTaskIds.Length > 0)
             {
@@ -199,6 +208,10 @@ namespace AscNet.GameServer.Handlers
             if (requestedTaskIds.Any(taskId => !currentTaskIds.Contains(taskId) && !IsDormTask(taskId) && !IsTransfiniteTask(session, taskId)))
             {
                 SendTaskSync(session);
+            }
+            foreach (RewardApplicationResult application in passportApplications)
+            {
+                application.SendPushes(session);
             }
             session.SendResponse(response, packet.Id);
         }
@@ -579,6 +592,9 @@ namespace AscNet.GameServer.Handlers
             tasks.AddRange(BuildTransfiniteTaskProgress(session)
                 .Where(x => existingIds.Add((uint)x.TaskId))
                 .Select(ToLoginTask));
+            tasks.AddRange(BuildPassportTaskProgress(session)
+                .Where(x => existingIds.Add((uint)x.TaskId))
+                .Select(ToLoginTask));
             return tasks;
         }
 
@@ -592,7 +608,7 @@ namespace AscNet.GameServer.Handlers
                     Tasks = BuildStoryTaskProgress(session)
                         .Select(ToSyncTask)
                         .Concat(BuildCurrentTaskProgress(session, loginOnly: true).Select(ToSyncTask))
-                        .Concat(BuildLifeTreeTaskProgress(session).Select(ToSyncTask))
+                        .Concat(BuildPassportTaskProgress(session).Select(ToSyncTask))
                         .Concat(BuildTransfiniteTaskProgress(session).Select(ToSyncTask))
                         .GroupBy(x => x.Id)
                         .Select(x => x.First())
@@ -690,6 +706,27 @@ namespace AscNet.GameServer.Handlers
                 }
             };
         }
+        private static List<MissionTaskProgress> BuildPassportTaskProgress(Session session) =>
+            TableReaderV2.Parse<TaskTable>()
+                .Where(task => task.Type == 51 && PassportModule.IsActivePassportTask(session, task.Id))
+                .Select(task =>
+                {
+                    ConditionTable? condition = TableReaderV2.Parse<ConditionTable>()
+                        .FirstOrDefault(candidate => candidate.Id == task.Condition);
+                    int value = condition?.Type switch
+                    {
+                        10101 => 1,
+                        11203 => checked((int)Math.Min(
+                            int.MaxValue,
+                            session.inventory.Items.FirstOrDefault(item => item.Id == Inventory.DailyActiveness)?.Count ?? 0)),
+                        _ => session.player.MissionProgress.ConditionCounters.GetValueOrDefault(task.Condition)
+                    };
+                    int state = session.player.MissionProgress.ClaimedTaskIds.Contains(task.Id)
+                        ? TaskStateFinish
+                        : value >= (task.Result ?? 1) ? TaskStateAchieved : TaskStateActive;
+                    return new MissionTaskProgress(task.Id, task.Condition, value, state);
+                }).ToList();
+
 
         private static List<MissionTaskProgress> BuildTransfiniteTaskProgress(Session session) =>
             TransfiniteTasks(session).Select(task =>
@@ -924,6 +961,30 @@ namespace AscNet.GameServer.Handlers
                 int increment = condition.Type == 15201 && condition.Params.Count > 1 ? 1 : count;
                 AddConditionProgress(session, condition.Id, increment);
             }
+            HashSet<int> passportTaskIds = BuildPassportTaskProgress(session)
+                .Select(task => task.TaskId)
+                .ToHashSet();
+            HashSet<int> passportConditionIds = TableReaderV2.Parse<TaskTable>()
+                .Where(task => passportTaskIds.Contains(task.Id))
+                .Select(task => task.Condition)
+                .ToHashSet();
+            foreach (ConditionTable condition in TableReaderV2.Parse<ConditionTable>()
+                .Where(condition => passportConditionIds.Contains(condition.Id)))
+            {
+                bool matches = condition.Type switch
+                {
+                    15101 or 15220 or 15225 => condition.Params.Contains(stageId),
+                    15201 when condition.Params.Count > 1 => condition.Params.Skip(1).Contains(stageId),
+                    15201 or 15217 or 15227 => true,
+                    15202 => condition.Params.Count <= 1
+                        || condition.Params[1] == 1 && stageId is >= 10_000_000 and < 20_000_000,
+                    25005 => stageId is >= 30_300_000 and < 30_310_000,
+                    _ => false
+                };
+                if (matches)
+                    AddConditionProgress(session, condition.Id,
+                        condition.Type == 15201 && condition.Params.Count > 1 ? 1 : count);
+            }
 
             if (actionPointCost > 0)
             {
@@ -1052,7 +1113,9 @@ namespace AscNet.GameServer.Handlers
                 .ToDictionary(condition => condition.Id, condition => amounts.Single(increment => condition.Type == increment.Key.ConditionType
                     && (increment.Key.Parameter is null ? condition.Params.Count < 2 : condition.Params.Count > 1 && condition.Params[1] == increment.Key.Parameter)).Value);
             List<TaskTable> tasks = TableReaderV2.Parse<TaskTable>()
-                .Where(task => conditionAmounts.ContainsKey(task.Condition) && IsTaskActive(task, now))
+                .Where(task => conditionAmounts.ContainsKey(task.Condition)
+                    && IsTaskActive(task, now)
+                    && (task.Type != 51 || PassportModule.IsActivePassportTask(session, task.Id)))
                 .ToList();
             if (tasks.Count == 0) return;
 
@@ -1080,12 +1143,34 @@ namespace AscNet.GameServer.Handlers
             (string.IsNullOrWhiteSpace(task.StartTime) || TryParseCurrentTaskTime(task.StartTime, out DateTimeOffset start) && now >= start)
             && (string.IsNullOrWhiteSpace(task.EndTime) || TryParseCurrentTaskTime(task.EndTime, out DateTimeOffset end) && now < end);
 
+        private static void SendPassportConditionTypeSync(Session session, int conditionType)
+        {
+            HashSet<int> conditionIds = TableReaderV2.Parse<ConditionTable>()
+                .Where(condition => condition.Type == conditionType)
+                .Select(condition => condition.Id)
+                .ToHashSet();
+            List<SyncTask> tasks = BuildPassportTaskProgress(session)
+                .Where(task => conditionIds.Contains(task.ConditionId))
+                .Select(ToSyncTask)
+                .ToList();
+            if (tasks.Count > 0)
+                session.SendPush(new NotifyTask { Tasks = new() { Tasks = tasks } });
+        }
+
         private static bool AddConditionTypeProgress(Session session, int conditionType, int amount)
         {
             List<int> conditionIds = TableReaderV2.Parse<CurrentConditionTable>()
                 .Where(x => x.Type == conditionType)
                 .Select(x => x.Id)
                 .ToList();
+            HashSet<int> activePassportConditions = BuildPassportTaskProgress(session)
+                .Select(task => task.ConditionId)
+                .ToHashSet();
+            conditionIds.AddRange(TableReaderV2.Parse<ConditionTable>()
+                .Where(condition => activePassportConditions.Contains(condition.Id)
+                    && condition.Type == conditionType)
+                .Select(condition => condition.Id));
+            conditionIds = conditionIds.Distinct().ToList();
             foreach (int conditionId in conditionIds)
             {
                 AddConditionProgress(session, conditionId, amount);
@@ -1100,9 +1185,15 @@ namespace AscNet.GameServer.Handlers
         {
             HashSet<int> selectedTypes = conditionTypes.ToHashSet();
             IReadOnlyDictionary<int, CurrentConditionTable> conditions = CurrentConditionsById.Value;
+            HashSet<int> passportConditionIds = TableReaderV2.Parse<ConditionTable>()
+                .Where(condition => condition.Type is int type && selectedTypes.Contains(type))
+                .Select(condition => condition.Id)
+                .ToHashSet();
             List<MissionTaskProgress> progress = BuildCurrentTaskProgress(session, loginOnly: true, conditionTypes: selectedTypes)
                 .Where(task => conditions.TryGetValue(task.ConditionId, out CurrentConditionTable? condition)
                     && selectedTypes.Contains(condition.Type))
+                .Concat(BuildPassportTaskProgress(session)
+                    .Where(task => passportConditionIds.Contains(task.ConditionId)))
                 .ToList();
             session.SendPush(new NotifyTask
             {
@@ -1113,14 +1204,23 @@ namespace AscNet.GameServer.Handlers
             });
         }
 
-
-        private static FinishTaskResponse ClaimTaskReward(Session session, int taskId, bool pushSync, out RewardApplicationResult? transfiniteApplication)
+        private static FinishTaskResponse ClaimTaskReward(
+            Session session,
+            int taskId,
+            bool pushSync,
+            out RewardApplicationResult? transfiniteApplication,
+            out RewardApplicationResult? passportApplication)
         {
             transfiniteApplication = null;
+            passportApplication = null;
             FinishTaskResponse? transfiniteTaskResponse = ClaimTransfiniteTaskReward(session, taskId, out transfiniteApplication);
             if (transfiniteTaskResponse is not null)
             {
                 return transfiniteTaskResponse;
+            }
+            if (PassportModule.IsActivePassportTask(session, taskId))
+            {
+                return ClaimPassportTaskReward(session, taskId, out passportApplication);
             }
             CurrentTaskTable? currentTask = TableReaderV2.Parse<CurrentTaskTable>().FirstOrDefault(x => x.Id == taskId);
             if (currentTask is null)
@@ -1169,6 +1269,61 @@ namespace AscNet.GameServer.Handlers
             {
                 Code = 0,
                 RewardGoodsList = rewardGoodsList
+            };
+        }
+
+        private static FinishTaskResponse ClaimPassportTaskReward(
+            Session session,
+            int taskId,
+            out RewardApplicationResult? application)
+        {
+            application = null;
+            TaskTable? task = TableReaderV2.Parse<TaskTable>()
+                .FirstOrDefault(candidate => candidate.Id == taskId && candidate.Type == 51);
+            if (task is null || !PassportModule.IsActivePassportTask(session, taskId))
+                return new FinishTaskResponse { Code = 20026007 };
+            if (session.player.MissionProgress.ClaimedTaskIds.Contains(taskId))
+                return new FinishTaskResponse { Code = 20026006 };
+
+            ConditionTable? condition = TableReaderV2.Parse<ConditionTable>()
+                .FirstOrDefault(candidate => candidate.Id == task.Condition);
+            int value = condition?.Type == 10101
+                ? 1
+                : session.player.MissionProgress.ConditionCounters.GetValueOrDefault(task.Condition);
+            if (condition is null || value < (task.Result ?? 1))
+                return new FinishTaskResponse { Code = 20026007 };
+
+            List<RewardGoodsTable> goods = task.RewardId is > 0
+                ? RewardHandler.GetRewardGoods(task.RewardId.Value)
+                : [];
+            if (goods.Count == 0)
+                return new FinishTaskResponse { Code = 20026003 };
+
+            int activityId = session.player.Passport.ActivityId;
+            session.player.MissionProgress.ClaimedTaskIds.Add(taskId);
+            try
+            {
+                application = RewardHandler.ApplyRewardsOnceAndPersist(
+                    [new RewardGrant(PassportModule.PassportTaskClaimKey(session, taskId), goods)],
+                    session);
+                session.player.SaveChecked();
+            }
+            catch
+            {
+                session.player.MissionProgress.ClaimedTaskIds.Remove(taskId);
+                application = null;
+                return new FinishTaskResponse { Code = 20026003 };
+            }
+
+            if (goods.Any(good => good.TemplateId == Inventory.PassportExp))
+                session.SendPush(new NotifyPassportBaseInfo
+                {
+                    BaseInfo = PassportModule.ReadBaseInfo(session, activityId)
+                });
+            return new FinishTaskResponse
+            {
+                Code = 0,
+                RewardGoodsList = application.RewardGoods
             };
         }
 
@@ -1636,6 +1791,7 @@ namespace AscNet.GameServer.Handlers
             else if (session.player.MissionProgress.DailyResetDay != day)
             {
                 ResetMissionType(session, 2);
+                ResetPassportTaskType(session, 1);
                 (bool dormInventoryChanged, bool dormCharacterChanged) = ResetDormMissionType(session, DormDailyTaskType);
                 inventoryChanged |= dormInventoryChanged;
                 characterChanged |= dormCharacterChanged;
@@ -1658,6 +1814,7 @@ namespace AscNet.GameServer.Handlers
             else if (session.player.MissionProgress.WeeklyResetWeek != week)
             {
                 ResetMissionType(session, 3);
+                ResetPassportTaskType(session, 2);
                 session.player.PlayerData.WeeklyActivenessRewardStatus = 0;
                 Item? weeklyActiveness = session.inventory.Items.FirstOrDefault(item => item.Id == Inventory.WeeklyActiveness);
                 if (weeklyActiveness is not null && weeklyActiveness.Count != 0)
@@ -1694,6 +1851,18 @@ namespace AscNet.GameServer.Handlers
                 session.player.MissionProgress.ConditionCounters.Remove(conditionId);
             }
         }
+        private static void ResetPassportTaskType(Session session, int groupType)
+        {
+            IReadOnlySet<int> taskIds = PassportModule.PassportTaskIdsByType(session, groupType);
+            if (taskIds.Count == 0) return;
+            List<TaskTable> tasks = TableReaderV2.Parse<TaskTable>()
+                .Where(task => taskIds.Contains(task.Id))
+                .ToList();
+            session.player.MissionProgress.ClaimedTaskIds.RemoveAll(taskIds.Contains);
+            foreach (int conditionId in tasks.Select(task => task.Condition).Distinct())
+                session.player.MissionProgress.ConditionCounters.Remove(conditionId);
+        }
+
         private static (bool Inventory, bool Character) ResetDormMissionType(Session session, int taskType)
         {
             List<TaskTable> tasks = TableReaderV2.Parse<TaskTable>().Where(task => task.Type == taskType).ToList();

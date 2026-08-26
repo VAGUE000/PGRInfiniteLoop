@@ -616,6 +616,11 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--passport-compat-only"))
+                {
+                    ValidatePassportCompatibility();
+                    return;
+                }
                 if (args.Contains("--purchase-request-compat-only"))
                 {
                     ValidatePurchaseRequestCompatibility();
@@ -4929,12 +4934,27 @@ namespace AscNet.Test
                 "AccountModule.DoLogin NotifyFubenBossSingleData startup payload",
                 "FubenBossSingleData",
                 "BossListDict");
-            if (startupPushesByName.ContainsKey("NotifyPassportData"))
-                throw new InvalidDataException("AccountModule.DoLogin must not emit NotifyPassportData without an authoritative active passport.");
+            AssertStartupPayloadMapContainsKeys(
+                startupPushesByName,
+                nameof(NotifyPassportData),
+                "AccountModule.DoLogin NotifyPassportData startup payload",
+                "ActivityId",
+                "Level",
+                "PassportInfos",
+                "LastTimeBaseInfo",
+                "IsGetSupplyReward",
+                "IsActivateRegressionTask",
+                "IsActivateNewbieTask");
+            int passportBaseIndex = RequiredPushIndex(startupPushes, nameof(NotifyPassportBaseInfo), 0,
+                "AccountModule.DoLogin Passport base info");
+            int passportDataIndex = RequiredPushIndex(startupPushes, nameof(NotifyPassportData), 0,
+                "AccountModule.DoLogin Passport data");
+            if (passportBaseIndex >= passportDataIndex)
+                throw new InvalidDataException($"AccountModule.DoLogin Passport order: observed {DescribePushes(startupPushes)}.");
 
             AssertForbiddenStartupPushesAbsent(
                 startupPushes,
-                [nameof(NotifyItemDataList), nameof(NotifyStageData), nameof(NotifyCharacterDataList), "NotifyPassportBaseInfo", "NotifyPassportAutoGetTaskReward", "NotifyGuildWarActivityData", "NotifyClientShieldFunction", "NotifyClientFunctionOpenConfig"],
+                [nameof(NotifyItemDataList), nameof(NotifyStageData), nameof(NotifyCharacterDataList), "NotifyPassportAutoGetTaskReward", "NotifyGuildWarActivityData", "NotifyClientShieldFunction", "NotifyClientFunctionOpenConfig"],
                 "AccountModule.DoLogin retail startup pushes");
 
             int purchasePredecessorIndex = RequiredPushIndex(startupPushes, nameof(NotifyNewPlayerTaskStatus), 0, "AccountModule.DoLogin purchase predecessor");
