@@ -1296,7 +1296,7 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(BuildEquipChipAutoRecycleNotify(session.player));
             session.SendPush(new NotifyEquipGuideData()
             {
-                EquipGuideData = new()
+                EquipGuideData = session.player.EquipGuideData ?? new()
             });
             session.SendPush(BuildNotifyArchiveLoginData(session.player));
             session.SendPush(AwarenessModule.BuildLoginData(session.player));

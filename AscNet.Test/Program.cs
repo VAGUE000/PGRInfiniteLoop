@@ -27,6 +27,7 @@ using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.character.quality;
 using AscNet.Table.V2.share.character.enhanceskill;
 using AscNet.Table.V2.share.equip;
+using AscNet.Table.V2.share.equip.equipguide;
 using AscNet.Table.V2.share.config;
 using AscNet.Table.V2.share.team;
 using AscNet.Table.V2.share.attrib;
@@ -19417,7 +19418,7 @@ namespace AscNet.Test
             };
             NotifyEquipGuideData roundTripEquipGuideData = MessagePackSerializer.Deserialize<NotifyEquipGuideData>(
                 MessagePackSerializer.Serialize(notifyEquipGuideData));
-            NotifyEquipGuideData.NotifyEquipGuideDataEquipGuideData roundTripGuideData = roundTripEquipGuideData.EquipGuideData
+            EquipGuideData roundTripGuideData = roundTripEquipGuideData.EquipGuideData
                 ?? throw new InvalidDataException("NotifyEquipGuideData EquipGuideData MessagePack round-trip serialized as nil.");
             AssertEqual(1001, roundTripGuideData.TargetId, "NotifyEquipGuideData EquipGuideData.TargetId MessagePack round-trip");
             AssertEqual(1021001, roundTripGuideData.CharacterId, "NotifyEquipGuideData EquipGuideData.CharacterId MessagePack round-trip");
@@ -19596,6 +19597,121 @@ namespace AscNet.Test
                 playerDataIdGetter,
                 characterFromUid,
                 "EquipCommand sync");
+
+            ValidateEquipGuideSetTargetBehavior();
+        }
+
+        private static void ValidateEquipGuideSetTargetBehavior()
+        {
+            List<EquipTargetTable> targetRows = TableReaderV2.Parse<EquipTargetTable>();
+            EquipTargetTable validTarget = targetRows.FirstOrDefault(row => row.Id > 0)
+                ?? throw new InvalidDataException("EquipTarget.tsv: expected at least one current-client equip-guide target row.");
+            AssertEqual(true, targetRows.All(row => row.Id > 0 && row.CharacterId > 0), "EquipTarget.tsv rows carry positive Id and CharacterId");
+            HashSet<int> knownTargetIds = targetRows.Select(row => row.Id).ToHashSet();
+            int invalidTargetId = knownTargetIds.Contains(999_999) ? 999_998 : 999_999;
+
+            const long playerId = 103_300_001;
+            const int packetId = 48_001;
+            string requestName = nameof(EquipGuideSetTargetRequest);
+            string responseName = nameof(EquipGuideSetTargetResponse);
+
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForMainLine2MessageStateCompatibility(
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Player> playerCollection);
+
+            AscNet.Common.Database.Player persistedPlayer;
+            using (LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                player,
+                CreateDrawCompatibilityInventory(playerId, []),
+                "equip-guide-set-target-compat-test"))
+            {
+                InvokeRegisteredRequestHandler(requestName, harness.Session, packetId,
+                    new EquipGuideSetTargetRequest { TargetId = validTarget.Id, PutOnPosList = [1, 3, 6] });
+                EquipGuideSetTargetResponse response = ReadResponsePayload<EquipGuideSetTargetResponse>(
+                    harness, packetId, responseName, $"{requestName} valid set response");
+                AssertEqual(0, response.Code, $"{responseName} valid set Code");
+                AssertEqual(validTarget.Id, response.EquipGuideData.TargetId, $"{responseName} valid set TargetId");
+                AssertEqual(validTarget.CharacterId, response.EquipGuideData.CharacterId, $"{responseName} valid set CharacterId");
+                AssertIntegerList([1, 3, 6], response.EquipGuideData.PutOnPosList.Select(pos => (long)pos).ToArray(), $"{responseName} valid set PutOnPosList");
+                AssertEmptyList(response.EquipGuideData.FinishedTargets, $"{responseName} valid set FinishedTargets");
+                if (harness.TryReadAvailablePacket($"{requestName} valid set extra packet", out Packet extra))
+                    throw new InvalidDataException($"{requestName} valid set: unexpected extra {extra.Type} packet (expected response only, no push).");
+
+                AssertEqual(1, playerCollection.ReplaceOneCalls, $"{requestName} valid set player save count");
+                AssertEqual(validTarget.Id, player.EquipGuideData.TargetId, $"{requestName} valid set persisted TargetId");
+                AssertEqual(validTarget.CharacterId, player.EquipGuideData.CharacterId, $"{requestName} valid set persisted CharacterId");
+                AssertIntegerList([1, 3, 6], player.EquipGuideData.PutOnPosList.Select(pos => (long)pos).ToArray(), $"{requestName} valid set persisted PutOnPosList");
+                AssertEmptyList(player.EquipGuideData.FinishedTargets, $"{requestName} valid set persisted FinishedTargets");
+                if (!ReferenceEquals(player, playerCollection.LastReplacement))
+                    throw new InvalidDataException($"{requestName}: expected Player.Save to persist the session player instance.");
+                persistedPlayer = playerCollection.LastReplacement
+                    ?? throw new InvalidDataException($"{requestName}: no persisted player replacement.");
+            }
+
+            // Relogin reload: persisted state survives an idempotent BSON round trip.
+            AscNet.Common.Database.Player reloadedPlayer = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(persistedPlayer.ToBson());
+            AssertEqual(validTarget.Id, reloadedPlayer.EquipGuideData.TargetId, "EquipGuideData BSON round-trip TargetId");
+            AssertEqual(validTarget.CharacterId, reloadedPlayer.EquipGuideData.CharacterId, "EquipGuideData BSON round-trip CharacterId");
+            AssertIntegerList([1, 3, 6], reloadedPlayer.EquipGuideData.PutOnPosList.Select(pos => (long)pos).ToArray(), "EquipGuideData BSON round-trip PutOnPosList");
+            AssertEmptyList(reloadedPlayer.EquipGuideData.FinishedTargets, "EquipGuideData BSON round-trip FinishedTargets");
+
+            // Cancel (TargetId 0) clears target/positions but preserves the finished list.
+            reloadedPlayer.EquipGuideData.FinishedTargets = [validTarget.Id];
+            using (LoopbackSessionHarness cancelHarness = new(
+                CreateDrawCompatibilityCharacter(playerId + 1),
+                reloadedPlayer,
+                CreateDrawCompatibilityInventory(playerId + 1, []),
+                "equip-guide-cancel-target-compat-test"))
+            {
+                InvokeRegisteredRequestHandler(requestName, cancelHarness.Session, packetId + 1,
+                    new EquipGuideSetTargetRequest { TargetId = 0, PutOnPosList = [] });
+                EquipGuideSetTargetResponse cancelResponse = ReadResponsePayload<EquipGuideSetTargetResponse>(
+                    cancelHarness, packetId + 1, responseName, $"{requestName} cancel response");
+                AssertEqual(0, cancelResponse.Code, $"{responseName} cancel Code");
+                AssertEqual(0, cancelResponse.EquipGuideData.TargetId, $"{responseName} cancel TargetId");
+                AssertEqual(0, cancelResponse.EquipGuideData.CharacterId, $"{responseName} cancel CharacterId");
+                AssertEmptyList(cancelResponse.EquipGuideData.PutOnPosList, $"{responseName} cancel PutOnPosList");
+                AssertIntegerList([validTarget.Id], cancelResponse.EquipGuideData.FinishedTargets.Select(id => (long)id).ToArray(), $"{responseName} cancel preserves FinishedTargets");
+                AssertEqual(0, reloadedPlayer.EquipGuideData.TargetId, $"{requestName} cancel persisted TargetId");
+                AssertEmptyList(reloadedPlayer.EquipGuideData.PutOnPosList, $"{requestName} cancel persisted PutOnPosList");
+                AssertIntegerList([validTarget.Id], reloadedPlayer.EquipGuideData.FinishedTargets.Select(id => (long)id).ToArray(), $"{requestName} cancel persisted FinishedTargets");
+            }
+
+            // Invalid inputs reject without save or mutation.
+            (string Name, int TargetId, int[] Positions)[] invalidCases =
+            [
+                ("nonexistent target", invalidTargetId, [1, 3, 6]),
+                ("duplicate positions", validTarget.Id, [2, 2, 6]),
+                ("out-of-range position", validTarget.Id, [2, 7]),
+                ("negative position", validTarget.Id, [-1, 2]),
+                ("cancel with positions", 0, [2, 5]),
+            ];
+            int invalidCaseIndex = 0;
+            foreach ((string caseName, int targetId, int[] positions) in invalidCases)
+            {
+                invalidCaseIndex++;
+                long invalidPlayerId = playerId + 10 + invalidCaseIndex;
+                AscNet.Common.Database.Player invalidPlayer = CreateDrawCompatibilityPlayer(invalidPlayerId);
+                int savesBefore = playerCollection.ReplaceOneCalls;
+                using (LoopbackSessionHarness invalidHarness = new(
+                    CreateDrawCompatibilityCharacter(invalidPlayerId),
+                    invalidPlayer,
+                    CreateDrawCompatibilityInventory(invalidPlayerId, []),
+                    $"equip-guide-invalid-{caseName.Replace(' ', '-')}"))
+                {
+                    InvokeRegisteredRequestHandler(requestName, invalidHarness.Session, packetId + invalidCaseIndex,
+                        new EquipGuideSetTargetRequest { TargetId = targetId, PutOnPosList = positions.ToList() });
+                    EquipGuideSetTargetResponse invalidResponse = ReadResponsePayload<EquipGuideSetTargetResponse>(
+                        invalidHarness, packetId + invalidCaseIndex, responseName, $"{requestName} {caseName} response");
+                    AssertEqual(true, invalidResponse.Code != 0, $"{responseName} {caseName} Code");
+                    AssertEqual(0, invalidResponse.EquipGuideData.TargetId, $"{responseName} {caseName} TargetId");
+                    AssertEmptyList(invalidResponse.EquipGuideData.PutOnPosList, $"{responseName} {caseName} PutOnPosList");
+                }
+                AssertEqual(savesBefore, playerCollection.ReplaceOneCalls, $"{requestName} {caseName} rejected without save");
+                AssertEqual(0, invalidPlayer.EquipGuideData.TargetId, $"{requestName} {caseName} unmutated TargetId");
+                AssertEmptyList(invalidPlayer.EquipGuideData.PutOnPosList, $"{requestName} {caseName} unmutated PutOnPosList");
+            }
         }
 
         private static void ValidateStageBookmarkCompatibilityShape()

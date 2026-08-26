@@ -639,17 +639,19 @@ namespace AscNet.Common.MsgPack
 
 
     [global::MessagePack.MessagePackObject(true)]
+    public class EquipGuideData
+    {
+        public Int32 TargetId { get; set; }
+        public Int32 CharacterId { get; set; }
+        public List<Int32> PutOnPosList { get; set; } = new();
+        public List<Int32> FinishedTargets { get; set; } = new();
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
     public class NotifyEquipGuideData
     {
-        [global::MessagePack.MessagePackObject(true)]
-        public class NotifyEquipGuideDataEquipGuideData
-        {
-            public Int32 TargetId { get; set; }
-            public Int32 CharacterId { get; set; }
-            public List<Int32> PutOnPosList { get; set; } = new();
-            public List<dynamic> FinishedTargets { get; set; } = new();
-        }
-        public NotifyEquipGuideDataEquipGuideData EquipGuideData { get; set; } = new();
+        public EquipGuideData EquipGuideData { get; set; } = new();
     }
 
 

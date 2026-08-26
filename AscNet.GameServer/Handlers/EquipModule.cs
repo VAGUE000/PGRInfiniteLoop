@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using AscNet.Common;
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
@@ -8,6 +8,7 @@ using AscNet.Table.V2.share.character;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.equip;
+using AscNet.Table.V2.share.equip.equipguide;
 using AscNet.Table.V2.share.config;
 using AscNet.Table.V2.share.item;
 using MessagePack;
@@ -324,7 +325,21 @@ namespace AscNet.GameServer.Handlers
     public class EquipDecomposeResponse
     {
         public int Code;
-        public List<RewardGoods> RewardGoodsList { get; set; } = new();
+        public List<RewardGoods> RewardGoodsList = new();
+    }
+
+    [MessagePackObject(true)]
+    public class EquipGuideSetTargetRequest
+    {
+        public int TargetId;
+        public List<int> PutOnPosList = new();
+    }
+
+    [MessagePackObject(true)]
+    public class EquipGuideSetTargetResponse
+    {
+        public int Code;
+        public EquipGuideData EquipGuideData { get; set; } = new();
     }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
@@ -408,6 +423,63 @@ namespace AscNet.GameServer.Handlers
                 session.inventory.Save();
 
             session.SendResponse(rsp, packet.Id);
+        }
+
+        [RequestPacketHandler("EquipGuideSetTargetRequest")]
+        public static void EquipGuideSetTargetRequestHandler(Session session, Packet.Request packet)
+        {
+            EquipGuideSetTargetRequest request = packet.Deserialize<EquipGuideSetTargetRequest>();
+            EquipGuideSetTargetResponse response = new()
+            {
+                Code = 0
+            };
+
+            List<int> positions = request.PutOnPosList ?? [];
+            bool validPositions = positions.Distinct().Count() == positions.Count
+                && positions.All(position => position is >= 0 and <= 6);
+            if (!validPositions || request.TargetId == 0 && positions.Count > 0)
+            {
+                // ponytail: generic nonzero code; retail invalid-code for equip guide is unproven.
+                response.Code = 1;
+                session.SendResponse(response, packet.Id);
+                return;
+            }
+
+
+            int characterId = 0;
+            if (request.TargetId != 0)
+            {
+                EquipTargetTable? target = TableReaderV2.Parse<EquipTargetTable>()
+                    .FirstOrDefault(row => row.Id == request.TargetId);
+                if (target is null)
+                {
+                    response.Code = 1;
+                    session.SendResponse(response, packet.Id);
+                    return;
+                }
+                characterId = target.CharacterId;
+            }
+
+            EquipGuideData original = session.player.EquipGuideData ?? new EquipGuideData();
+            session.player.EquipGuideData = new EquipGuideData
+            {
+                TargetId = request.TargetId,
+                CharacterId = characterId,
+                PutOnPosList = request.TargetId != 0 ? new List<int>(positions) : new List<int>(),
+                FinishedTargets = new List<int>(original.FinishedTargets ?? [])
+            };
+            try
+            {
+                session.player.SaveChecked();
+            }
+            catch (Exception exception)
+            {
+                session.player.EquipGuideData = original;
+                session.log.Error($"Failed to persist equip guide set target: {exception}");
+                response.Code = 1;
+            }
+            response.EquipGuideData = session.player.EquipGuideData;
+            session.SendResponse(response, packet.Id);
         }
 
         [RequestPacketHandler("EquipOneKeyFeedRequest")]

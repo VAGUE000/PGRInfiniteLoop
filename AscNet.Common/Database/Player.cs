@@ -1,4 +1,4 @@
-﻿using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using AscNet.Logging;
@@ -680,6 +680,9 @@ namespace AscNet.Common.Database
         {
             RecycleStar = [1, 2, 3, 4]
         };
+
+        [BsonElement("equip_guide_data")]
+        public EquipGuideData EquipGuideData { get; set; } = new();
 
         [BsonElement("vote_alarm_data")]
         public List<VoteAlarmData> VoteAlarmData { get; set; } = new();
