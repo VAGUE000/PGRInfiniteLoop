@@ -1002,13 +1002,7 @@ namespace AscNet.GameServer.Handlers
             };
         }
 
-        private static NotifyBfrtData BuildBfrtLoginData()
-        {
-            return new()
-            {
-                BfrtData = new()
-            };
-        }
+        private static NotifyBfrtData BuildBfrtLoginData(Player player) => BfrtModule.BuildLoginData(player);
 
         private static NotifyTRPGData BuildTrpgLoginData()
         {
@@ -1301,6 +1295,7 @@ namespace AscNet.GameServer.Handlers
             };
 
             PassportModule.PrepareLogin(session);
+            BfrtModule.ReconcileTaskStages(session);
             NotifyTaskData notifyTaskData = new()
             {
                 TaskData = new()
@@ -1339,6 +1334,7 @@ namespace AscNet.GameServer.Handlers
             PurchaseDailyNotify purchaseDailyNotify = BuildPurchaseDailyNotify();
             NotifyPurchaseRecommendConfig purchaseRecommendConfig = BuildPurchaseRecommendConfig();
             session.SendPush(notifyLogin);
+            session.SendPush(StrongholdModule.BuildLoginData(session.player));
             if (headTimeout is not null)
                 session.SendPush(headTimeout);
             session.SendPush(notifyPayInfo);
@@ -1365,7 +1361,7 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(BuildRegressionLoginData());
             session.SendPush(new NotifyAllRedEnvelope());
             session.SendPush(new NotifyScoreTitleData());
-            session.SendPush(BuildBfrtLoginData());
+            session.SendPush(BuildBfrtLoginData(session.player));
             session.SendPush(new NotifyBiancaTheatreActivityData());
             SendEmptyStartupPush(session, "NotifyTheatre3ActivityData");
             SendEmptyStartupPush(session, "NotifyFangKuaiData");
@@ -1447,7 +1443,7 @@ namespace AscNet.GameServer.Handlers
             SendEmptyStartupPush(session, "NotifyMazeData");
             SendEmptyStartupPush(session, "NotifyMechanismDataDb");
             StudyProgressModule.SendLoginState(session);
-            SendEmptyStartupPush(session, "NotifyTrialData");
+            session.SendPush(TrialModule.BuildLoginData(session.player));
             session.SendPush(notifyFunctionalEntranceData);
             session.SendPush(DrawModule.BuildNotifyDrawCanLiverData(session.player));
             SendEmptyStartupPush(session, "NotifyGame2048DataDb");
@@ -1464,7 +1460,6 @@ namespace AscNet.GameServer.Handlers
             SendEmptyStartupPush(session, "NotifySettingLoadingOption");
             session.SendPush(RepeatChallengeModule.BuildLoginData(session.player));
             SendEmptyStartupPush(session, "NotifyPlayerReportData");
-            SendEmptyStartupPush(session, "NotifySameColorGameData");
             SendEmptyStartupPush(session, "NotifyStrongholdLoginData");
             SendEmptyStartupPush(session, "NotifySucceedBossData");
             SendEmptyStartupPush(session, "NotifyTaikoMasterData");

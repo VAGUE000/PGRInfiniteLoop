@@ -296,6 +296,7 @@ namespace AscNet.Common.Database
         public long EndTime { get; set; }
     }
 
+
     public partial class Player
     {
         public static readonly IMongoCollection<Player> collection = Common.db.GetCollection<Player>("players");

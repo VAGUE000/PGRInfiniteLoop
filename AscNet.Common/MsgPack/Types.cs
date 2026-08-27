@@ -966,18 +966,46 @@ namespace AscNet.Common.MsgPack
     }
 
 
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtTeamInfo
+{
+    public Int32 Id { get; set; }
+    public List<List<UInt32>> FightTeamList { get; set; } = new();
+    public List<List<UInt32>> LogisticsTeamList { get; set; } = new();
+    public List<Int32> CaptainPosList { get; set; } = new();
+    public List<Int32> FirstFightPosList { get; set; } = new();
+}
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtGroupRecord
+{
+    public Int32 Id { get; set; }
+    public Int32 Count { get; set; }
+    public Boolean IsRecvReward { get; set; }
+}
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtProgressInfo
+{
+    public Int32 GroupId { get; set; }
+    public List<Int32> StageIds { get; set; } = new();
+}
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyBfrtData
+{
     [global::MessagePack.MessagePackObject(true)]
-    public class NotifyBfrtData
+    public sealed class NotifyBfrtDataBfrtData
     {
-        [global::MessagePack.MessagePackObject(true)]
-        public class NotifyBfrtDataBfrtData
-        {
-            public List<dynamic> BfrtGroupRecords { get; set; } = new();
-            public List<dynamic> BfrtTeamInfos { get; set; } = new();
-        }
-
-        public NotifyBfrtDataBfrtData BfrtData { get; set; }
+        public List<BfrtGroupRecord> BfrtGroupRecords { get; set; } = new();
+        public List<BfrtTeamInfo> BfrtTeamInfos { get; set; } = new();
+        public BfrtProgressInfo? BfrtProgressInfo { get; set; }
+        public Int32 CourseRewardStar { get; set; }
     }
+    public NotifyBfrtDataBfrtData BfrtData { get; set; } = new();
+}
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyBfrtProgressInfo
+{
+    public BfrtProgressInfo? BfrtProgressInfo { get; set; }
+}
 
 
     [global::MessagePack.MessagePackObject(true)]
@@ -1944,39 +1972,21 @@ namespace AscNet.Common.MsgPack
         public Int32 Endurance { get; set; }
         public Int32 MineralLeft { get; set; }
         public Int32 TotalMineral { get; set; }
-        public List<dynamic> ElectricCharacterIds { get; set; } = new();
-        public List<dynamic> FinishGroupIds { get; set; } = new();
-        public List<dynamic> FinishGroupInfos { get; set; } = new();
-        public List<dynamic> HistoryFinishGroupInfos { get; set; } = new();
-        public List<dynamic> GroupInfos { get; set; } = new();
-        public List<dynamic> TeamInfos { get; set; } = new();
-        [global::MessagePack.MessagePackObject(true)]
-        public class NotifyStrongholdLoginDataGroupStageData
-        {
-            public Int32 Id { get; set; }
-            public List<UInt32> StageIds { get; set; } = new();
-            public Dictionary<dynamic, dynamic> StageBuffId { get; set; }
-            public Int32 SupportId { get; set; }
-        }
+        public List<Int32> ElectricCharacterIds { get; set; } = new();
+        public List<Int32> FinishGroupIds { get; set; } = new();
+        public List<StrongholdFinishGroupInfo> FinishGroupInfos { get; set; } = new();
+        public List<StrongholdFinishGroupInfo> HistoryFinishGroupInfos { get; set; } = new();
+        public List<StrongholdGroupInfo> GroupInfos { get; set; } = new();
+        public List<StrongholdTeamInfo> TeamInfos { get; set; } = new();
 
-        public List<NotifyStrongholdLoginDataGroupStageData> GroupStageDatas { get; set; } = new();
+        public List<StrongholdGroupStageData> GroupStageDatas { get; set; } = new();
         public List<Int32> RuneList { get; set; } = new();
-        public List<dynamic> RewardIds { get; set; } = new();
-        [global::MessagePack.MessagePackObject(true)]
-        public class NotifyStrongholdLoginDataLastResultRecord
-        {
-            public Int32 Id { get; set; }
-            public Int32 FinishCount { get; set; }
-            public Int32 MinerCount { get; set; }
-            public Int32 MineralCount { get; set; }
-            public Int32 AssistCount { get; set; }
-            public Int32 AssistRewardValue { get; set; }
-        }
+        public List<Int32> RewardIds { get; set; } = new();
 
-        public NotifyStrongholdLoginDataLastResultRecord LastResultRecord { get; set; }
-        public List<dynamic> MineRecords { get; set; } = new();
+        public StrongholdResultRecord LastResultRecord { get; set; } = new();
+        public List<StrongholdMineRecord> MineRecords { get; set; } = new();
         public Int32 LevelId { get; set; }
-        public List<dynamic> StayDays { get; set; } = new();
+        public List<Int32> StayDays { get; set; } = new();
     }
 
 
@@ -3953,4 +3963,215 @@ namespace AscNet.Common.MsgPack
         public int RecordTimeId { get; set; }
     }
 
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdCharacterInfo
+{
+    public Int32 Id { get; set; }
+    public Int64 PlayerId { get; set; }
+    public Int32 RobotId { get; set; }
+    public Int32 Ability { get; set; }
+    public Int32 Pos { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdPluginInfo
+{
+    public Int32 Id { get; set; }
+    public Int32 Count { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdChangeDay { public Int32 CurDay { get; set; } public Int32 FightBeginTime { get; set; } public Int32 MineralLeft { get; set; } public Int32 Endurance { get; set; } public Int32 ElectricEnergy { get; set; } public Int32 BorrowCount { get; set; } public List<Int32> StayDays { get; set; } = new(); public List<StrongholdMineRecord> MineRecords { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdTotalMineral { public Int32 TotalMineral { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdResultRecord { public StrongholdResultRecord Record { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdBorrowCount { public Int32 BorrowCount { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdFinishGroupId { public List<Int32> FinishGroupIds { get; set; } = new(); public Int32 ElectricEnergy { get; set; } public List<StrongholdFinishGroupInfo> FinishGroupInfos { get; set; } = new(); public List<StrongholdFinishGroupInfo> HistoryFinishGroupInfos { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdFinishGroupInfo { public List<StrongholdFinishGroupInfo> FinishGroupInfos { get; set; } = new(); public List<StrongholdFinishGroupInfo> HistoryFinishGroupInfos { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyUpdateStrongholdGroupData { public StrongholdGroupInfo GroupInfo { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyDeleteStrongholdGroupData { public Int32 Id { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdEnduranceData { public Int32 Endurance { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class NotifyStrongholdEnd { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdTeamInfo
+{
+    public Int32 Id { get; set; }
+    public Int32 ElementId { get; set; }
+    public Int32 CaptainPos { get; set; }
+    public Int32 FirstPos { get; set; }
+    public Int32 EnterCgIndex { get; set; }
+    public Int32 SettleCgIndex { get; set; }
+    public Int32 RuneId { get; set; }
+    public Int32 SubRuneId { get; set; }
+    public Int32 SelectedGeneralSkill { get; set; }
+    public List<StrongholdCharacterInfo> CharacterInfos { get; set; } = new();
+    public List<StrongholdPluginInfo> PluginInfos { get; set; } = new();
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdGroupStageData
+{
+    public Int32 Id { get; set; }
+    public List<UInt32> StageIds { get; set; } = new();
+    public Dictionary<Int32, Int32> StageBuffId { get; set; } = new();
+    public Int32 SupportId { get; set; }
+    public Int32 ExtendBuffId { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdGroupInfo
+{
+    public Int32 Id { get; set; }
+    public List<Int32> FinishStageIds { get; set; } = new();
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdFinishGroupInfo
+{
+    public Int32 Id { get; set; }
+    public Int32 UsedElectricEnergy { get; set; }
+    public Int32 NeedElectricEnergy { get; set; }
+    public Int32 UsedSystemElectricEnergy { get; set; }
+    public Int32 NeedSystemElectricEnergy { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdMineRecord
+{
+    public Int32 Day { get; set; }
+    public Int32 MinerCount { get; set; }
+    public Int32 MineralCount { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdResultRecord
+{
+    public Int32 Id { get; set; }
+    public Int32 FinishCount { get; set; }
+    public Int32 MinerCount { get; set; }
+    public Int32 MineralCount { get; set; }
+    public Int32 AssistCount { get; set; }
+    public Int32 AssistRewardValue { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdLendDayInfo
+{
+    public Int32 Id { get; set; }
+    public Int32 LendCount { get; set; }
+    public Int32 SetTime { get; set; }
+    public Boolean IsStay { get; set; }
+    public Double LendRewardValue { get; set; }
+    public Double SetTimeRewardValue { get; set; }
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdFightResultInfo
+{
+    public Int32 GroupId { get; set; }
+    public List<RewardGoods> RewardGoodsList { get; set; } = new();
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class StrongholdFightResult
+{
+    public Boolean AllFinished { get; set; }
+    public List<StrongholdFightResultInfo> GroupFightResultInfos { get; set; } = new();
+}
+
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdMineralRequest { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdMineralResponse { public Int32 Code { get; set; } public Int32 MineralCount { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdElectricTeamRequest { public List<Int32> CharacterIds { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdElectricTeamResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class ResetStrongholdGroupRequest { public Int32 Id { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class ResetStrongholdGroupResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class ResetStrongholdStageRequest { public Int32 GroupId { get; set; } public Int32 StageId { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class ResetStrongholdStageResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdTeamRequest { public Boolean Own { get; set; } public List<StrongholdTeamInfo> TeamInfos { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdTeamResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdFightTeamRequest { public Int32 Id { get; set; } public List<StrongholdTeamInfo> TeamInfos { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdFightTeamResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdAssistCharacterListRequest { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdAssistCharacterListResponse { public Int32 Code { get; set; } public List<dynamic> CharacterDetails { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdAssistCharacterRequest { public Int32 CharacterId { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdAssistCharacterResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetBfrtDataRequest { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetBfrtDataResponse
+{
+    public Int32 Code { get; set; }
+    public NotifyBfrtData.NotifyBfrtDataBfrtData BfrtData { get; set; } = new();
+}
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtTeamSetRequest
+{
+    public Int32 BfrtGroupId { get; set; }
+    public List<List<UInt32>> FightTeam { get; set; } = new();
+    public List<List<UInt32>> LogisticsTeam { get; set; } = new();
+    public List<Int32> CaptainPosList { get; set; } = new();
+    public List<Int32> FirstFightPosList { get; set; } = new();
+}
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtTeamSetResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtOneKeyPassGroupRequest { public Int32 BfrtChapterId { get; set; } public Int32 BfrtGroupId { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtOneKeyPassGroupResponse { public Int32 Code { get; set; } public BfrtGroupRecord? BfrtGroupRecord { get; set; } public List<RewardGoods> RewardGoodsList { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtResetGroupStageRequest { public Int32 BfrtStageId { get; set; } public Boolean IsClear { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtResetGroupStageResponse { public Int32 Code { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtReceiveCourseRewardRequest { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtReceiveCourseRewardResponse { public Int32 Code { get; set; } public Int32 CourseRewardStar { get; set; } public List<RewardGoods> RewardGoodsList { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtReceiveChapterGroupRewardRequest { public Int32 BfrtChapterId { get; set; } public Int32 BfrtGroupId { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class BfrtReceiveChapterGroupRewardResponse { public Int32 Code { get; set; } public List<RewardGoods> RewardGoodsList { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdLendDetailRequest { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdLendDetailResponse { public Int32 Code { get; set; } public List<StrongholdLendDayInfo> LendDayInfos { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdRewardRequest { public List<Int32> Ids { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class GetStrongholdRewardResponse { public Int32 Code { get; set; } public List<Int32> SuccessIds { get; set; } = new(); public List<RewardGoods> RewardGoodsList { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SweepStrongholdStageRequest { public Int32 GroupId { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SweepStrongholdStageResponse { public Int32 Code { get; set; } public StrongholdFightResult StrongholdFightResult { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SelectStrongholdLevelRequest { public Int32 LevelId { get; set; } }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SelectStrongholdLevelResponse { public Int32 Code { get; set; } public Int32 ElectricEnergy { get; set; } public Int32 Endurance { get; set; } public List<StrongholdGroupStageData> GroupStageDatas { get; set; } = new(); }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdStayRequest { }
+[global::MessagePack.MessagePackObject(true)]
+public sealed class SetStrongholdStayResponse { public Int32 Code { get; set; } public List<Int32> StayDays { get; set; } = new(); }
 }

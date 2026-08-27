@@ -101,6 +101,21 @@ namespace AscNet.Test
                     ValidateAssignCompatibility();
                     return;
                 }
+                if (args.Contains("--bfrt-compat-only"))
+                {
+                    ValidateBfrtCompatibility();
+                    return;
+                }
+                if (args.Contains("--trial-compat-only"))
+                {
+                    ValidateTrialCompatibility();
+                    return;
+                }
+                if (args.Contains("--stronghold-compat-only"))
+                {
+                    ValidateStrongholdCompatibility();
+                    return;
+                }
                 if (args.Contains("--simulate-train-compat-only"))
                 {
                     ValidateSimulateTrainCompatibility();

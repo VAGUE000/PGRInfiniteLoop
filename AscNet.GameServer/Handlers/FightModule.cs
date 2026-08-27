@@ -442,7 +442,20 @@ namespace AscNet.GameServer.Handlers
         public static void PreFightRequestHandler(Session session, Packet.Request packet)
         {
             PreFightRequest req = MessagePackSerializer.Deserialize<PreFightRequest>(packet.Content);
-
+            if (StrongholdModule.TryAuthorizePreFight(session.player, req.PreFightData.StageId, out int strongholdCode))
+            {
+                if (strongholdCode != 0)
+                {
+                    session.SendResponse(new PreFightResponse { Code = strongholdCode }, packet.Id);
+                    return;
+                }
+            }
+            if (BfrtModule.TryAuthorizePreFight(session.player, req.PreFightData.StageId, out int bfrtCode)
+                && bfrtCode != 0)
+            {
+                session.SendResponse(new PreFightResponse { Code = bfrtCode }, packet.Id);
+                return;
+            }
             StageTable? stageTable = ResolveStageTable(req.PreFightData.StageId, out bool isCurrentStudyStage);
             if (stageTable is null
                 && !BossModule.IsStage(req.PreFightData.StageId)
@@ -2254,6 +2267,19 @@ namespace AscNet.GameServer.Handlers
                 session.SendResponse(new FightSettleResponse { Code = FightAuthorizationError }, packet.Id);
                 return;
             }
+            if (session.player.Stronghold.PendingStageId == (int)req.Result.StageId)
+            {
+                StrongholdModule.Settle(session.player, req.Result.IsWin);
+                FightSettleResponse.FightSettleResponseSettle settle = new()
+                {
+                    IsWin = req.Result.IsWin,
+                    StageId = req.Result.StageId,
+                    StrongholdFightResult = new StrongholdFightResult { AllFinished = req.Result.IsWin }
+                };
+                session.fight = null;
+                session.SendResponse(new FightSettleResponse { Code = 0, Settle = settle }, packet.Id);
+                return;
+            }
             StageTable? stageTable = ResolveStageTable(req.Result.StageId, out _);
             if (stageTable is null
                 && !BossModule.IsStage(req.Result.StageId)
@@ -2528,6 +2554,9 @@ namespace AscNet.GameServer.Handlers
                 session.fight?.PreFight.PreFightData,
                 req.Result);
             bool updatedRepeatChallenge = RepeatChallengeModule.RecordStageClear(session.player, req.Result.StageId, challengeCount);
+            bool updatedTrial = req.Result.IsWin && req.Result.StageId <= int.MaxValue
+                && TrialModule.RecordStageClear(session.player, (int)req.Result.StageId);
+            BfrtModule.Settle(session, req.Result.StageId, req.Result.IsWin);
             if (MainLineChapterIdsByStageId.Value.TryGetValue(responseStageId, out int mainLineChapterId))
             {
                 session.player.FubenMainLineData ??= new();
@@ -2584,6 +2613,8 @@ namespace AscNet.GameServer.Handlers
             }
             if (updatedRepeatChallenge)
                 session.SendPush(RepeatChallengeModule.BuildExpChange(session.player));
+            if (updatedTrial)
+                session.SendPush(TrialModule.BuildLoginData(session.player));
             TaskModule.RecordStageClear(session, (int)req.Result.StageId, challengeCount);
             GuideModule.CompleteOpenedGuideOnStageSettle(session, [req.Result.StageId, responseStageId]);
             session.SendResponse(fightSettleResponse, packet.Id);
