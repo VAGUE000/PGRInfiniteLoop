@@ -61,6 +61,9 @@ public sealed class PlayerDormState
 
     [BsonElement("work_next_refresh_time")]
     public uint WorkNextRefreshTime { get; set; }
+    [BsonElement("event_next_refresh_time")]
+    public uint EventNextRefreshTime { get; set; }
+
 
     [BsonElement("snapshot_times")]
     public int SnapshotTimes { get; set; }

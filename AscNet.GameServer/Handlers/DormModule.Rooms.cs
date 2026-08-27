@@ -88,7 +88,10 @@ internal partial class DormModule
         foreach (PlayerDormFurniture furniture in session.player.Dorm.Furniture.Where(x => x.DormitoryId == request.DormitoryId && !placedIds.Contains(x.Id))) furniture.DormitoryId = -1;
         RecalculateRecovery(session);
         foreach (PlayerDormCharacter character in session.player.Dorm.Characters.Where(x => x.DormitoryId == request.DormitoryId)) character.LastRecoveryTime = now;
-        session.player.Save(); SendCharacterRecovery(session); session.SendResponse(new PutFurnitureResponse(), packet.Id);
+        session.player.Save();
+        if (request.FurnitureList.Count > 0) TaskModule.RecordTableDrivenProgress(session, [(29016, null, 1)]);
+        SendCharacterRecovery(session);
+        session.SendResponse(new PutFurnitureResponse(), packet.Id);
     }
 
     [RequestPacketHandler("DormSnapshotLayoutRequest")]

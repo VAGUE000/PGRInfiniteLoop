@@ -1212,6 +1212,20 @@ internal static partial class Program
         }
         using LoopbackSessionHarness flowHarness = new(flowCharacter, flowPlayer,
             CreateDrawCompatibilityInventory(flowPlayerId, []), "transfinite-captured-team-flow");
+        MethodInfo prepareSession = RequiredMethod(Payload("TransfiniteModule"), "PrepareLogin",
+            BindingFlags.Static | BindingFlags.NonPublic, [typeof(Session), typeof(long)]);
+        flowHarness.Session.inventory.Items.Add(new Item { Id = 105, Count = 1_500 });
+        prepareSession.Invoke(null, [flowHarness.Session, activeSchedule.StartTime]);
+        AssertEqual(0L, flowHarness.Session.inventory.Items.Single(item => item.Id == 105).Count,
+            "Transfinite same-rotation login clears unbacked operators");
+        string currentScoreClaim = $"transfinite-terminal:{flowState.ActivityId}:{flowState.CircleId}:{flowState.StageGroupId}";
+        flowHarness.Session.inventory.Items.Single(item => item.Id == 105).Count = 30;
+        flowHarness.Session.inventory.AppliedRewardClaims.Add(currentScoreClaim);
+        prepareSession.Invoke(null, [flowHarness.Session, activeSchedule.StartTime]);
+        AssertEqual(30L, flowHarness.Session.inventory.Items.Single(item => item.Id == 105).Count,
+            "Transfinite same-rotation login preserves earned operators");
+        flowHarness.Session.inventory.Items.Single(item => item.Id == 105).Count = 0;
+        flowHarness.Session.inventory.AppliedRewardClaims.Remove(currentScoreClaim);
         flowState.ActivityAuthorizedUntil = long.MaxValue;
         TransfiniteTeamInfo Team(params long[] ids) => new()
         {

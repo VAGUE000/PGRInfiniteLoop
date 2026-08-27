@@ -70,6 +70,18 @@ def _is_ascnet_host(host):
         host in {"sdkapi.kurogame-service.com", "sdkapi.kurogame-service.xyz"}
         or (host.startswith(("prod-encdn-", "prod-twcdn-")) and host.endswith(".kurogame.net"))
     )
+def _is_pgr_game_popup_notice_request(flow):
+    host = flow.request.pretty_host
+    path = flow.request.path.split("?", 1)[0]
+    return (
+        host
+        and host.startswith(("prod-encdn-", "prod-twcdn-"))
+        and host.endswith(".pgr-game.com")
+        and path.startswith("/prod/client/notice/config/")
+        and path.endswith("/PopUpPicNotice.json")
+    )
+
+
 
 def _is_upstream_notice_html_request(flow):
     path = flow.request.path.split("?", 1)[0]
@@ -180,7 +192,8 @@ def request(flow: http.HTTPFlow) -> None:
         _log_flow("PASS", flow)
         return
 
-    if not (_is_ascnet_host(flow.request.pretty_host) or _is_ascnet_gate_request(flow) or _is_wildcard_ascnet_request(flow)):
+    if not (_is_ascnet_host(flow.request.pretty_host) or _is_pgr_game_popup_notice_request(flow)
+            or _is_ascnet_gate_request(flow) or _is_wildcard_ascnet_request(flow)):
         return
 
     scheme, host, port = _ascnet_target()

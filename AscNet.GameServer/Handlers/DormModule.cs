@@ -197,8 +197,8 @@ internal partial class DormModule
         }
         changed |= NormalizeFreeRooms(session.player.Dorm);
         changed |= session.player.Dorm.NormalizeFurnitureIds();
-        changed |= SettleRecovery(session, now);
-        RecalculateRecovery(session);
+        changed |= NormalizeWorkRefresh(session.player.Dorm, now);
+        changed |= EvaluateEvents(session, now);
 
         if (changed)
             session.player.Save();
@@ -245,16 +245,13 @@ internal partial class DormModule
     public static void DormEnterRequestHandler(Session session, Packet.Request packet)
     {
         ResumePendingDormRewards(session);
-        if (SettleRecovery(session, (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds())) session.player.Save();
+        uint now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        bool changed = SettleRecovery(session, now);
+        changed |= NormalizeWorkRefresh(session.player.Dorm, now);
+        changed |= EvaluateEvents(session, now);
+        if (changed) session.player.Save();
         TaskModule.RecordConditionType(session, 29014);
-        session.SendResponse(new DormEnterResponse
-        {
-            CharacterEvents = session.player.Dorm.Characters.Select(character => new DormCharacterEvent
-            {
-                CharacterId = character.CharacterId,
-                EventList = character.EventList.Select(evt => new DormEvent { EventId = evt.EventId, EndTime = evt.EndTime }).ToList()
-            }).ToList()
-        }, packet.Id);
+        session.SendResponse(new DormEnterResponse { CharacterEvents = EventResponses(session) }, packet.Id);
         SendCharacterAttrs(session);
     }
 
@@ -298,6 +295,7 @@ internal partial class DormModule
         }
         RecalculateRecovery(session);
         session.player.Save();
+        TaskModule.RecordTableDrivenProgress(session, [(29002, null, 1)]);
         SendCharacterRecovery(session);
         session.SendResponse(new DormPutCharacterResponse { SuccessIds = request.CharacterIds }, packet.Id);
     }
@@ -347,6 +345,7 @@ internal partial class DormModule
         DormWorkRequest request = packet.Deserialize<DormWorkRequest>();
         uint now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         bool settled = SettleRecovery(session, now);
+        settled |= NormalizeWorkRefresh(session.player.Dorm, now);
         Dictionary<string, int> config = Config();
         List<DormCharacterWorkTable> table = TableReaderV2.Parse<DormCharacterWorkTable>();
         int unlocked = session.player.Dorm.Rooms.Count;
@@ -483,8 +482,50 @@ internal partial class DormModule
     }
 
     [RequestPacketHandler("DormCharacterFinishAllEventRequest")]
-    public static void DormCharacterFinishAllEventRequestHandler(Session session, Packet.Request packet) =>
-        session.SendResponse(new DormCharacterFinishAllEventResponse { Code = DormRequestDataInvalid }, packet.Id);
+    public static void DormCharacterFinishAllEventRequestHandler(Session session, Packet.Request packet)
+    {
+        List<(PlayerDormCharacter Character, PlayerDormEvent Event)> events = session.player.Dorm.Characters
+            .SelectMany(character => character.EventList.Select(evt => (character, evt)))
+            .ToList();
+        if (events.Count == 0)
+        {
+            session.SendResponse(new DormCharacterFinishAllEventResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+
+        Dictionary<int, DormCharacterEventTable> rows = TableReaderV2.Parse<DormCharacterEventTable>()
+            .ToDictionary(row => row.EventId);
+        List<RewardGrant> grants = events
+            .Where(entry => rows.TryGetValue(entry.Event.EventId, out DormCharacterEventTable? row))
+            .Select(entry => new RewardGrant(
+                $"dorm-event:{session.player.PlayerData.Id}:{entry.Character.CharacterId}:{entry.Event.EventId}:{entry.Event.EndTime}",
+                RewardHandler.GetRewardGoods(rows[entry.Event.EventId].FinishReward)))
+            .Where(grant => grant.Goods.Count > 0)
+            .ToList();
+        RewardApplicationResult? rewards;
+        try
+        {
+            rewards = grants.Count == 0 ? null : RewardHandler.ApplyRewardsOnceAndPersist(grants, session);
+            foreach ((PlayerDormCharacter character, _) in events)
+                character.EventList.Clear();
+            session.player.SaveChecked();
+        }
+        catch
+        {
+            foreach ((PlayerDormCharacter character, PlayerDormEvent evt) in events)
+                if (!character.EventList.Contains(evt))
+                    character.EventList.Add(evt);
+            session.SendResponse(new DormCharacterFinishAllEventResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+
+        rewards?.SendPushes(session);
+        session.SendResponse(new DormCharacterFinishAllEventResponse
+        {
+            MoodChange = events.Select(entry => entry.Character.CharacterId).Distinct().ToDictionary(id => id, _ => 0),
+            RewardGoods = rewards?.RewardGoods ?? []
+        }, packet.Id);
+    }
 
     [RequestPacketHandler("DormitoryListRequest")]
     public static void DormitoryListRequestHandler(Session session, Packet.Request packet) =>
@@ -651,8 +692,26 @@ internal partial class DormModule
 
     private static Dictionary<string, int> Config() => TableReaderV2.Parse<ConfigTable>()
         .Where(row => row.Key is "DormMoodInitValue" or "DormVitalityInitValue" or "DormWorkTimePerVitality" or "DormWorkRewardPerVitality"
-            or "DormMaxCreateCount" or "DormMaxRecycleCount" or "DormMaxTotalFurnitureCount")
+            or "DormMaxCreateCount" or "DormMaxRecycleCount" or "DormMaxRemouldCount" or "DormMaxTotalFurnitureCount"
+            or "DormEventRefreshTime" or "DailyResetTimestamp")
         .ToDictionary(row => row.Key, row => int.Parse(row.Value, CultureInfo.InvariantCulture));
+
+    internal static uint NextDailyRefreshTime(uint now)
+    {
+        const uint day = 24 * 60 * 60;
+        uint reset = checked((uint)Config().GetValueOrDefault("DailyResetTimestamp"));
+        uint next = checked(now - now % day + reset);
+        return next > now ? next : checked(next + day);
+    }
+
+    private static bool NormalizeWorkRefresh(PlayerDormState dorm, uint now)
+    {
+        if (dorm.WorkNextRefreshTime != 0 && now < dorm.WorkNextRefreshTime)
+            return false;
+        dorm.WorkList.RemoveAll(work => work.WorkEndTime == 0);
+        dorm.WorkNextRefreshTime = NextDailyRefreshTime(now);
+        return true;
+    }
 
     private static string WorkClaimKey(Session session, PlayerDormWork work) =>
         string.IsNullOrEmpty(work.ClaimKey)

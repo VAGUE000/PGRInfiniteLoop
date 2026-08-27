@@ -167,8 +167,70 @@ internal partial class DormModule
     }
 
     [RequestPacketHandler("RemouldFurnitureRequest")]
-    public static void RemouldFurnitureRequestHandler(Session session, Packet.Request packet) =>
-        session.SendResponse(new RemouldFurnitureResponse { Code = DormRequestDataInvalid }, packet.Id);
+    public static void RemouldFurnitureRequestHandler(Session session, Packet.Request packet)
+    {
+        RemouldFurnitureRequest request = packet.Deserialize<RemouldFurnitureRequest>();
+        int max = Config().GetValueOrDefault("DormMaxRemouldCount", 1);
+        List<int> consumedIds = request.Params.SelectMany(parameter => parameter.FurnitureIds).ToList();
+        if (request.Params.Count == 0 || consumedIds.Distinct().Count() != consumedIds.Count
+            || !OwnedFreeFurniture(session.player.Dorm, consumedIds, max, out List<PlayerDormFurniture> consumed))
+        {
+            session.SendResponse(new RemouldFurnitureResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+
+        FurnitureTables tables = FurnitureData.Value;
+        List<PlayerDormFurniture> created = [];
+        foreach (RemouldFurnitureParam parameter in request.Params)
+        {
+            FurnitureRewardTable? reward = tables.Rewards.FirstOrDefault(row => row.Id == parameter.ItemId);
+            FurnitureTable? config = reward is null ? null : tables.Furniture.FirstOrDefault(row => row.Id == reward.FurnitureId);
+            FurnitureExtraAttrTable? extra = reward is null ? null : tables.ExtraAttrs.FirstOrDefault(row => row.Id == reward.ExtraAttrId);
+            FurnitureBaseAttrTable? baseAttr = extra is null ? null : tables.BaseAttrs.FirstOrDefault(row => row.Id == extra.BaseAttrId);
+            if (parameter.FurnitureIds.Count == 0 || config is null || extra is null || baseAttr is null
+                || !session.player.Dorm.FurnitureUnlocks.Contains((uint)config.Id)
+                || parameter.FurnitureIds.Select(id => consumed.First(furniture => furniture.Id == id))
+                    .Any(furniture => tables.Furniture.FirstOrDefault(row => row.Id == furniture.ConfigId)?.TypeId != config.TypeId))
+            {
+                session.SendResponse(new RemouldFurnitureResponse { Code = DormRequestDataInvalid }, packet.Id);
+                return;
+            }
+            List<int> bases = extra.AttrIds.Take(3).Concat(Enumerable.Repeat(0, 3)).Take(3).ToList();
+            created.Add(new PlayerDormFurniture
+            {
+                ConfigId = (uint)config.Id, Addition = reward!.AdditionId,
+                AttrList = Split(baseAttr.Value, bases).ToList(), BaseAttrList = bases,
+                IsLocked = config.IsDefaultLocked == 1
+            });
+        }
+        if (!CanStore(session.player.Dorm, created, consumed.Count))
+        {
+            session.SendResponse(new RemouldFurnitureResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+
+        PlayerDormState snapshot = BsonSerializer.Deserialize<PlayerDormState>(session.player.Dorm.ToBson());
+        try
+        {
+            AssignFurnitureIds(session.player.Dorm, created);
+            session.player.Dorm.Furniture.RemoveAll(furniture => consumedIds.Contains(furniture.Id));
+            session.player.Dorm.Furniture.AddRange(created);
+            Unlock(session.player.Dorm, created);
+            session.player.SaveChecked();
+        }
+        catch
+        {
+            session.player.Dorm = snapshot;
+            session.SendResponse(new RemouldFurnitureResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+        TaskModule.RecordTableDrivenProgress(session, [(29007, null, 1)]);
+        session.SendResponse(new RemouldFurnitureResponse
+        {
+            RemovedIds = consumedIds,
+            FurnitureList = created.Select(Furniture).ToList()
+        }, packet.Id);
+    }
 
     [RequestPacketHandler("FurnitureRemakeRequest")]
     public static void FurnitureRemakeRequestHandler(Session session, Packet.Request packet)

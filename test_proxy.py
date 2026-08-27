@@ -62,6 +62,48 @@ class ProxyRoutingTests(unittest.TestCase):
         self.assertEqual(9, flow.request.port)
         self.assertEqual("prod-encdn-tx.kurogame.net", flow.request.headers["X-Forwarded-Host"])
 
+    def test_pgr_game_popup_notice_routes_to_ascnet(self):
+        flow = self.flow(
+            "/prod/client/notice/config/jmpyKTGE5zwaZ0O4/com.kurogame.punishing.grayraven.en/4.7.0/PopUpPicNotice.json",
+            "prod-encdn-ak.pgr-game.com",
+        )
+
+        with patch.dict(os.environ, {"ASCNET_PROXY_TARGET": "http://127.0.0.1:9"}, clear=False):
+            proxy.request(flow)
+
+        self.assertEqual("127.0.0.1", flow.request.host)
+        self.assertEqual(9, flow.request.port)
+        self.assertEqual("prod-encdn-ak.pgr-game.com", flow.request.headers["X-Forwarded-Host"])
+
+    def test_pgr_game_banner_asset_stays_upstream(self):
+        flow = self.flow(
+            "/prod/client/notice/pic/home-lobby-banner.png",
+            "prod-encdn-ak.pgr-game.com",
+        )
+
+        with patch.dict(os.environ, {"ASCNET_PROXY_TARGET": "http://127.0.0.1:9"}, clear=False):
+            proxy.request(flow)
+
+        self.assertEqual("prod-encdn-ak.pgr-game.com", flow.request.host)
+        self.assertEqual(80, flow.request.port)
+        self.assertNotIn("X-Forwarded-Host", flow.request.headers)
+
+    def test_pgr_game_scroll_banner_metadata_stays_upstream(self):
+        flow = self.flow(
+            "/prod/client/notice/config/jmpyKTGE5zwaZ0O4/com.kurogame.punishing.grayraven.en/4.7.0/ScrollPicNotice.json",
+            "prod-encdn-ak.pgr-game.com",
+        )
+
+        with patch.dict(os.environ, {"ASCNET_PROXY_TARGET": "http://127.0.0.1:9"}, clear=False):
+            proxy.request(flow)
+
+        self.assertEqual("prod-encdn-ak.pgr-game.com", flow.request.host)
+        self.assertEqual(80, flow.request.port)
+        self.assertNotIn("X-Forwarded-Host", flow.request.headers)
+
+
+
+
     def test_tw_config_passes_through_upstream(self):
         flow = self.flow(
             "/prod/client/config/PQQdKhfClWoBi3Iq/com.kurogame.punishing.grayraven.tw/4.5.0/standalone/config.tab",

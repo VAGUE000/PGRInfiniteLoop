@@ -720,7 +720,7 @@ namespace AscNet.GameServer.Handlers
             BossModule.PrepareLogin(session);
             BossInshotModule.PrepareLogin(session.player, DateTimeOffset.UtcNow);
             FashionStoryModule.PrepareLogin(session.player, DateTimeOffset.UtcNow);
-            TransfiniteModule.PrepareLogin(session.player, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            TransfiniteModule.PrepareLogin(session, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             GuideModule.ReconcileStageCompletedGuides(session.player, session.stage);
             List<TimeLimitCtrlConfigList> timeLimitControls = BuildTimeLimitControlConfigList();
             NotifyLogin notifyLogin = new()
@@ -1038,10 +1038,8 @@ namespace AscNet.GameServer.Handlers
             return currentBusinessDay > previousBusinessDay;
         }
 
-        private static uint NextDailyRefreshTime()
-        {
-            return (uint)DateTimeOffset.Now.ToUnixTimeSeconds() + 3600 * 24;
-        }
+        private static uint NextDailyRefreshTime() =>
+            DormModule.NextDailyRefreshTime(checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
 
         private static readonly IReadOnlyDictionary<string, byte[]> SupportedStartupPushPayloads = new Dictionary<string, byte[]>
         {

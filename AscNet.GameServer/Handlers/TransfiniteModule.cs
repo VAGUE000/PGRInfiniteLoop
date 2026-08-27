@@ -62,6 +62,31 @@ internal static class TransfiniteModule
     internal static bool IsStage(uint id) => id <= int.MaxValue && Stages.Value.ContainsKey((int)id);
     private static bool Authorized(TransfiniteState? x) => x is not null && x.ActivityAuthorizedUntil > DateTimeOffset.UtcNow.ToUnixTimeSeconds() && Activities.Value.ContainsKey(x.ActivityId);
 
+    internal static void PrepareLogin(Session session, long now)
+    {
+        TransfiniteState? previous = session.player.Transfinite;
+        int previousActivity = previous?.ActivityId ?? 0;
+        int previousCircle = previous?.CircleId ?? 0;
+        PrepareLogin(session.player, now);
+        if (session.player.Transfinite is not { } current)
+            return;
+
+        int score = Score(session);
+        bool newRotation = previousActivity != current.ActivityId || previousCircle != current.CircleId;
+        string terminalPrefix = $"transfinite-terminal:{current.ActivityId}:{current.CircleId}:";
+        string resetPrefix = $"transfinite-reset:{current.ActivityId}:{current.CircleId}:";
+        string legacyPrefix = $"transfinite-score:{current.ActivityId}:{current.CircleId}:";
+        bool backedByCurrentRotation = session.inventory.AppliedRewardClaims.Any(claim =>
+            claim.StartsWith(terminalPrefix, StringComparison.Ordinal)
+            || claim.StartsWith(resetPrefix, StringComparison.Ordinal)
+            || claim.StartsWith(legacyPrefix, StringComparison.Ordinal));
+        if (score <= 0 || !newRotation && backedByCurrentRotation)
+            return;
+
+        session.inventory.Do(TransfiniteScoreItemId, -score);
+        session.inventory.SaveChecked();
+    }
+
     internal static void PrepareLogin(Player player, long now)
     {
         var anchor = GetAnchoredActivities().LastOrDefault(x => x.Schedule.StartTime <= now);

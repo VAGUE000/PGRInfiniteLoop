@@ -437,6 +437,7 @@ internal partial class Program
 
         InvokeRegisteredRequestHandler(nameof(DormPutCharacterRequest), harness.Session, 46_995_011,
             new DormPutCharacterRequest { DormitoryId = room.Id, CharacterIds = [firstCharacterId, secondCharacterId] });
+        _ = ReadPushPayload<NotifyTask>(harness, nameof(NotifyTask), "Dorm resident guide task push");
         NotifyDormCharacterRecovery putRecovery = ReadPushPayload<NotifyDormCharacterRecovery>(harness,
             nameof(NotifyDormCharacterRecovery), "Dorm put character recovery push");
         AssertEqual(2, putRecovery.ChangeType, "Dorm put character recovery type");
@@ -463,6 +464,7 @@ internal partial class Program
         int savesBeforePlacement = playerSaves.ReplaceOneCalls;
         InvokeRegisteredRequestHandler(nameof(PutFurnitureRequest), harness.Session, 46_995_036,
             new PutFurnitureRequest { DormitoryId = room.Id, FurnitureList = [new PutFurnitureData { Id = lockedFurniture.Id, X = 0, Y = 0, Angle = 0 }] });
+        _ = ReadPushPayload<NotifyTask>(harness, nameof(NotifyTask), "Dorm placement guide task push");
         _ = ReadPushPayload<NotifyDormCharacterRecovery>(harness, nameof(NotifyDormCharacterRecovery), "Dorm locked furniture placement recovery push");
         AssertEqual(0, ReadResponsePayload<PutFurnitureResponse>(harness, 46_995_036,
             nameof(PutFurnitureResponse), "Dorm locked furniture placement response").Code, "Dorm locked furniture placement code");
@@ -554,14 +556,20 @@ internal partial class Program
         DormEnterResponse enter = ReadResponsePayload<DormEnterResponse>(harness, 46_995_001, nameof(DormEnterResponse), "Dorm enter response");
         NotifyCharacterAttr enterAttrs = ReadPushPayload<NotifyCharacterAttr>(harness, nameof(NotifyCharacterAttr), "Dorm enter character attr push");
         AssertEqual(2, enterAttrs.AttrList.Count, "Dorm enter character attr count");
-        AssertEqual(true, expiredEventCharacter.EventList.Any(evt => evt.EventId == int.MaxValue), "Dorm enter preserves expired event");
+        HashSet<int> eventIds = TableReaderV2.Parse<DormCharacterEventTable>()
+            .Where(row => row.CharacterId == (int)expiredEventCharacter.CharacterId && row.EventId > 0)
+            .Select(row => row.EventId).ToHashSet();
+        AssertEqual(true, expiredEventCharacter.EventList.All(evt => evt.EventId != int.MaxValue), "Dorm enter expires stale event");
+        AssertEqual(true, expiredEventCharacter.EventList.Any(evt => eventIds.Contains(evt.EventId) && evt.EndTime > (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            "Dorm enter generates table event");
+        int eventCount = expiredEventCharacter.EventList.Count;
         AssertEqual(0, enter.Code, "Dorm enter code");
         AssertEqual(2, enter.CharacterEvents.Count, "Dorm enter character events");
-
         InvokeRegisteredRequestHandler(nameof(DormEnterRequest), harness.Session, 46_995_038, new DormEnterRequest());
         _ = ReadPushPayload<NotifyTask>(harness, nameof(NotifyTask), "Dorm reenter task progress push");
-        AssertEqual(0, ReadResponsePayload<DormEnterResponse>(harness, 46_995_038, nameof(DormEnterResponse), "Dorm reenter response").Code,
-            "Dorm reenter code");
+        DormEnterResponse reenter = ReadResponsePayload<DormEnterResponse>(harness, 46_995_038, nameof(DormEnterResponse), "Dorm reenter response");
+        AssertEqual(0, reenter.Code, "Dorm reenter code");
+        AssertEqual(eventCount, expiredEventCharacter.EventList.Count, "Dorm reenter does not duplicate event");
         _ = ReadPushPayload<NotifyCharacterAttr>(harness, nameof(NotifyCharacterAttr), "Dorm reenter character attr push");
         AssertEqual(resumeItemBefore + 1, inventory.Items.Single(item => item.Id == work.ItemId).Count,
             "Dorm reenter does not duplicate restored reward");
@@ -637,6 +645,14 @@ internal partial class Program
         AssertEqual(20060040, replay.Code, "Dorm work claim replay code");
         AssertEqual(workItemBefore + 2L * rewardPerVitality, inventory.Items.Single(item => item.Id == work.ItemId).Count,
             "Dorm work claim replay does not increment inventory");
+        player.Dorm.WorkNextRefreshTime = 0;
+        uint choreRefreshNow = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        _ = buildLoginData.Invoke(null, [harness.Session]);
+        AssertEqual(0, player.Dorm.WorkList.Count, "Dorm daily refresh removes rested chores");
+        AssertEqual(true, player.Dorm.WorkNextRefreshTime > choreRefreshNow
+            && player.Dorm.WorkNextRefreshTime <= choreRefreshNow + 24 * 60 * 60,
+            "Dorm daily refresh schedules authoritative next rollover");
+
 
         worker.Vitality = work.Vitality;
         InvokeRegisteredRequestHandler(nameof(DormWorkRequest), harness.Session, 46_995_041,
@@ -665,7 +681,32 @@ internal partial class Program
             nameof(DormWordDoneResponse), "Dorm quick work retry response").Code, "Dorm quick work retry succeeds once");
         AssertEqual(0, player.Dorm.PendingRewards.Count, "Dorm quick work retry clears pending reward");
         _ = ReadPushPayload<NotifyCharacterAttr>(harness, nameof(NotifyCharacterAttr), "Dorm quick work retry character push");
+        Dictionary<int, FurnitureTable> furnitureRows = TableReaderV2.Parse<FurnitureTable>().ToDictionary(row => row.Id);
+        FurnitureRewardTable remouldReward = TableReaderV2.Parse<FurnitureRewardTable>().First(reward =>
+            player.Dorm.Furniture.Any(furniture => !furniture.IsLocked
+                && furnitureRows[(int)furniture.ConfigId].TypeId == furnitureRows[reward.FurnitureId].TypeId));
+        PlayerDormFurniture remouldInput = player.Dorm.Furniture.First(furniture =>
+            !furniture.IsLocked && furnitureRows[(int)furniture.ConfigId].TypeId == furnitureRows[remouldReward.FurnitureId].TypeId);
+        remouldInput.DormitoryId = 0;
+        if (!player.Dorm.FurnitureUnlocks.Contains((uint)remouldReward.FurnitureId))
+            player.Dorm.FurnitureUnlocks.Add((uint)remouldReward.FurnitureId);
+        InvokeRegisteredRequestHandler(nameof(RemouldFurnitureRequest), harness.Session, 46_995_044,
+            new RemouldFurnitureRequest { Params = [new RemouldFurnitureParam { ItemId = remouldReward.Id, FurnitureIds = [remouldInput.Id] }] });
+        _ = ReadPushPayload<NotifyTask>(harness, nameof(NotifyTask), "Dorm guide remould task push");
+        RemouldFurnitureResponse remould = ReadResponsePayload<RemouldFurnitureResponse>(harness, 46_995_044,
+            nameof(RemouldFurnitureResponse), "Dorm guide remould response");
+        AssertEqual(0, remould.Code, "Dorm guide remould code");
+        AssertEqual(true, remould.RemovedIds.SequenceEqual([remouldInput.Id]), "Dorm guide remould consumed furniture");
+        AssertEqual((uint)remouldReward.FurnitureId, remould.FurnitureList.Single().ConfigId, "Dorm guide remould table output");
+        Dictionary<int, ConditionTable> dormGuideConditions = TableReaderV2.Parse<ConditionTable>()
+            .Where(condition => condition.Id is >= 14001 and <= 14006).ToDictionary(condition => condition.Id);
+        foreach (int conditionId in dormGuideConditions.Keys)
+            AssertEqual(true, player.MissionProgress.ConditionCounters.GetValueOrDefault(conditionId) >= 1,
+                $"Dorm guide condition {conditionId} tracks");
 
+
+        foreach (PlayerDormCharacter character in player.Dorm.Characters)
+            character.EventList.Clear();
         InvokeRegisteredRequestHandler(nameof(DormCharacterFinishAllEventRequest), harness.Session, 46_995_005,
             new DormCharacterFinishAllEventRequest());
         DormCharacterFinishAllEventResponse finish = ReadResponsePayload<DormCharacterFinishAllEventResponse>(harness,
@@ -679,9 +720,15 @@ internal partial class Program
             new DormCharacterFinishAllEventRequest());
         DormCharacterFinishAllEventResponse completedFinish = ReadResponsePayload<DormCharacterFinishAllEventResponse>(harness,
             46_995_006, nameof(DormCharacterFinishAllEventResponse), "Dorm finish-all completion response");
-        AssertEqual(20060040, completedFinish.Code, "Dorm finish-all unavailable reward mapping code");
-        AssertEqual(1, eventCharacter.EventList.Count, "Dorm finish-all preserves event without authoritative reward mapping");
-        AssertNoAvailablePacket(harness, "Dorm finish-all unavailable reward mapping");
+        AssertEqual(0, completedFinish.Code, "Dorm finish-all completion code");
+        AssertEqual(0, completedFinish.MoodChange[secondCharacterId], "Dorm finish-all unchanged mood");
+        AssertEqual(0, eventCharacter.EventList.Count, "Dorm finish-all clears completed event");
+        AssertNoAvailablePacket(harness, "Dorm finish-all completion");
+        InvokeRegisteredRequestHandler(nameof(DormCharacterFinishAllEventRequest), harness.Session, 46_995_007,
+            new DormCharacterFinishAllEventRequest());
+        AssertEqual(20060040, ReadResponsePayload<DormCharacterFinishAllEventResponse>(harness, 46_995_007,
+            nameof(DormCharacterFinishAllEventResponse), "Dorm finish-all replay response").Code, "Dorm finish-all replay code");
+        AssertNoAvailablePacket(harness, "Dorm finish-all replay");
     }
 
     private static int DormConfig(string key)

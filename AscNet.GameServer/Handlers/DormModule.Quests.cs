@@ -61,7 +61,8 @@ internal partial class DormModule
 
     internal static NotifyDormitoryData.NotifyDormitoryDataDormQuestData BuildQuestLoginData(Session session)
     {
-        NormalizeQuestState(session);
+        uint now = QuestNow();
+        NormalizeQuestState(session, now);
         PlayerDormQuestState state = session.player.Dorm.Quest;
         return new NotifyDormitoryData.NotifyDormitoryDataDormQuestData
         {
@@ -76,7 +77,8 @@ internal partial class DormModule
     [RequestPacketHandler("QuestUpgradeTerminalLvRequest")]
     public static void QuestUpgradeTerminalLvRequestHandler(Session session, Packet.Request packet)
     {
-        NormalizeQuestState(session);
+        uint now = QuestNow();
+        NormalizeQuestState(session, now);
         PlayerDormQuestState state = session.player.Dorm.Quest;
         QuestTerminalTable? terminal = Terminal(state.TerminalLv);
         int code = terminal is null ? QuestTerminalCfgError
@@ -93,8 +95,7 @@ internal partial class DormModule
             {
                 NotifyItemDataList items = Pay(session, terminal!);
                 session.inventory.SaveChecked();
-                state.TerminalUpgradeStatus = 1;
-                state.TerminalUpgradeTime = QuestNow();
+                state.TerminalUpgradeTime = now;
                 session.player.SaveChecked();
                 if (items.ItemDataList.Count > 0) session.SendPush(items);
             }
@@ -111,12 +112,13 @@ internal partial class DormModule
         session.SendResponse(new QuestUpgradeTerminalLvResponse { Code = code, TerminalUpgradeTime = state.TerminalUpgradeTime }, packet.Id);
     }
 
-    [RequestPacketHandler("QuestAcceptRequest")]
+[RequestPacketHandler("QuestAcceptRequest")]
     public static void QuestAcceptRequestHandler(Session session, Packet.Request packet)
     {
-        NormalizeQuestState(session);
+        uint now = QuestNow();
+        NormalizeQuestState(session, now);
         QuestAcceptRequest request = packet.Deserialize<QuestAcceptRequest>();
-        RefillExhaustedBoard(session);
+        RefillExhaustedBoard(session, now);
         PlayerDormQuestState state = session.player.Dorm.Quest;
         int code = ValidateAccept(session, request);
         if (code == 0)
@@ -128,7 +130,7 @@ internal partial class DormModule
                 state.QuestAccept.Add(new PlayerDormQuestAccept
                 {
                     QuestId = board.QuestId, FileId = SelectFile(session, quest, parameter.TeamCharacter, board.ResetCount, board.Index), Index = board.Index, IsSpecialQuest = board.IsSpecialQuest,
-                    ResetCount = board.ResetCount, TeamCharacter = parameter.TeamCharacter.ToList(), AcceptTime = QuestNow(),
+                    ResetCount = board.ResetCount, TeamCharacter = parameter.TeamCharacter.ToList(), AcceptTime = now,
                     IsSatisfyRecommend = IsRecommended(parameter.TeamCharacter, quest), IsAward = false
                 });
             }
@@ -156,10 +158,13 @@ internal partial class DormModule
         List<RewardGrant> grants = pendingRewards.Count > 0
             ? pendingRewards.Where(pending => completed.Any(accept => pending.Key.StartsWith(QuestClaimPrefix(session, accept), StringComparison.Ordinal))).Select(pending => new RewardGrant(pending.Key, pending.Goods.Select(good => new AscNet.Table.V2.share.reward.RewardGoodsTable { Id = good.Id, TemplateId = good.TemplateId, Count = good.Count, Params = good.Params.ToList() }).ToList())).ToList()
             : completed.SelectMany(accept => Grants(session, accept, quests[accept.QuestId])).ToList();
+        bool boardRefreshed = false;
         if (pendingRewards.Count == 0)
         {
             int finishQuestCount = state.FinishQuestCount;
             int terminalUpgradeExp = state.TerminalUpgradeExp;
+            int resetCount = state.ResetCount;
+            List<PlayerDormQuest> totalQuest = state.TotalQuest.Select(quest => new PlayerDormQuest { QuestId = quest.QuestId, FileId = quest.FileId, Index = quest.Index, IsSpecialQuest = quest.IsSpecialQuest, ResetCount = quest.ResetCount }).ToList();
             List<List<int>> finishQuests = state.FinishQuests.Select(row => row.ToList()).ToList();
             List<PlayerDormCollectFile> files = state.CollectFiles.Select(file => new PlayerDormCollectFile { FileId = file.FileId, IsRead = file.IsRead }).ToList();
             List<int> triggered = state.TriggerLimitedQuest.ToList();
@@ -175,12 +180,15 @@ internal partial class DormModule
                 if (accept.FileId > 0 && state.CollectFiles.All(file => file.FileId != accept.FileId)) state.CollectFiles.Add(new PlayerDormCollectFile { FileId = accept.FileId });
             }
             session.player.Dorm.PendingRewards.AddRange(grants.Select(grant => new PlayerDormPendingReward { Key = grant.ClaimKey, Goods = grant.Goods.Select(good => new PlayerDormPendingRewardItem { Id = good.Id, TemplateId = good.TemplateId, Count = good.Count, Params = good.Params.ToList() }).ToList() }));
+            boardRefreshed = RefillExhaustedBoard(session, now);
             try { session.player.SaveChecked(); }
             catch
             {
                 foreach (PlayerDormQuestAccept accept in accepted) accept.IsAward = false;
                 state.FinishQuestCount = finishQuestCount;
                 state.TerminalUpgradeExp = terminalUpgradeExp;
+                state.ResetCount = resetCount;
+                state.TotalQuest = totalQuest;
                 state.FinishQuests = finishQuests;
                 state.CollectFiles = files;
                 state.TriggerLimitedQuest = triggered;
@@ -189,21 +197,28 @@ internal partial class DormModule
                 return;
             }
         }
+        int resetBeforeReward = state.ResetCount;
+        List<PlayerDormQuest> totalBeforeReward = state.TotalQuest.Select(quest => new PlayerDormQuest { QuestId = quest.QuestId, FileId = quest.FileId, Index = quest.Index, IsSpecialQuest = quest.IsSpecialQuest, ResetCount = quest.ResetCount }).ToList();
         List<PlayerDormPendingReward> removed = [];
         try
         {
             RewardApplicationResult? rewards = grants.Count == 0 ? null : RewardHandler.ApplyRewardsOnceAndPersist(grants, session);
             removed = session.player.Dorm.PendingRewards.Where(pending => grants.Any(grant => grant.ClaimKey == pending.Key)).ToList();
             session.player.Dorm.PendingRewards.RemoveAll(pending => grants.Any(grant => grant.ClaimKey == pending.Key));
+            boardRefreshed |= RefillExhaustedBoard(session, now);
             session.player.SaveChecked();
             rewards?.SendPushes(session);
         }
         catch
         {
+            session.player.Dorm.Quest.ResetCount = resetBeforeReward;
+            session.player.Dorm.Quest.TotalQuest = totalBeforeReward;
             session.player.Dorm.PendingRewards.AddRange(removed);
             session.SendResponse(new QuestGetAllRewardResponse { Code = QuestTerminalCfgError, DormQuestUpdate = Update(state) }, packet.Id);
             return;
         }
+        if (boardRefreshed)
+            session.SendPush(new NotifyDormQuestData { TotalQuest = state.TotalQuest.Select(Quest).ToList(), QuestAccept = state.QuestAccept.Select(Accept).ToList() });
         session.SendResponse(new QuestGetAllRewardResponse
         {
             FinishQuestInfos = completed.Select(accept => new QuestFinishInfo { QuestId = accept.QuestId, TeamCharacter = accept.TeamCharacter.ToList(), FinishReward = quests[accept.QuestId].FinishReward, ExtraReward = accept.IsSatisfyRecommend ? quests[accept.QuestId].ExtraReward : 0, FileId = accept.FileId }).ToList(),
@@ -237,7 +252,7 @@ internal partial class DormModule
         session.SendResponse(new QuestReadFileResponse { Code = code }, packet.Id);
     }
 
-    private static void NormalizeQuestState(Session session)
+    private static void NormalizeQuestState(Session session, uint now)
     {
         PlayerDormQuestState state = session.player.Dorm.Quest;
         bool changed = false;
@@ -245,7 +260,7 @@ internal partial class DormModule
         if (Terminal(state.TerminalLv) is null) { state.TerminalLv = 1; changed = true; }
         QuestTerminalTable? terminal = Terminal(state.TerminalLv);
         if (terminal is null) return;
-        bool completedUpgrade = state.TerminalUpgradeStatus != 0 && terminal.NeedTime > 0 && QuestNow() >= state.TerminalUpgradeTime + terminal.NeedTime;
+        bool completedUpgrade = state.TerminalUpgradeStatus != 0 && terminal.NeedTime > 0 && now >= state.TerminalUpgradeTime + terminal.NeedTime;
         if (completedUpgrade)
         {
             QuestTerminalTable? next = Terminal(state.TerminalLv + 1);
@@ -264,18 +279,19 @@ internal partial class DormModule
             state.TotalQuest = BuildBoard(session, terminal, state.ResetCount);
             changed = true;
         }
+        if (RefillExhaustedBoard(session, now)) changed = true;
         if (changed) session.player.SaveChecked();
         if (completedUpgrade) session.SendPush(new NotifyDormQuestTerminalInit { TerminalLv = state.TerminalLv, TotalQuest = state.TotalQuest.Select(Quest).ToList() });
     }
-    private static void RefillExhaustedBoard(Session session)
+    private static bool RefillExhaustedBoard(Session session, uint now)
     {
         PlayerDormQuestState state = session.player.Dorm.Quest;
-        if (state.TotalQuest.Count == 0 || state.TotalQuest.Any(board => !state.QuestAccept.Any(accept => accept.Index == board.Index && accept.ResetCount == board.ResetCount && accept.IsAward))) return;
+        if (state.TotalQuest.Count == 0 || state.TotalQuest.Any(board => !state.QuestAccept.Any(accept => accept.Index == board.Index && accept.ResetCount == board.ResetCount && accept.IsAward))) return false;
         QuestTerminalTable? terminal = Terminal(state.TerminalLv);
-        if (terminal is null) return;
+        if (terminal is null) return false;
         state.ResetCount++;
         state.TotalQuest = BuildBoard(session, terminal, state.ResetCount);
-        session.player.SaveChecked();
+        return true;
     }
 
 
