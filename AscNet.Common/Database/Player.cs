@@ -644,6 +644,10 @@ namespace AscNet.Common.Database
         [BsonElement("unlock_comics")]
         public List<int> UnlockComics { get; set; } = AscNet.Common.ArchiveDefaults.CreateDefaultUnlockedArchiveComics();
 
+        [BsonElement("archive_monster_kills")]
+        [BsonDictionaryOptions(DictionaryRepresentation.ArrayOfDocuments)]
+        public Dictionary<int, int> ArchiveMonsterKills { get; set; } = new();
+
         [BsonElement("life_tree_data")]
         public NotifyLifeTreeData LifeTreeData { get; set; } = new();
 

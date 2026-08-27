@@ -15,6 +15,7 @@ using AscNet.Table.V2.share.signin;
 using AscNet.Table.V2.share.fuben.bossinshot;
 using AscNet.Table.V2.share.fuben.fashionstory;
 using AscNet.Table.V2.share.fuben.transfinite;
+using AscNet.Table.V2.share.fuben.simulatetrain;
 using AscNet.Table.V2.share.miniactivity.dyemerge;
 using AscNet.Table.V2.share.miniactivity.hitmouse;
 using AscNet.Table.V2.share.theatre6;
@@ -1199,9 +1200,35 @@ namespace AscNet.GameServer.Handlers
             List<int> unlockComics = player.UnlockComics is { Count: > 0 }
                 ? player.UnlockComics.Distinct().Order().ToList()
                 : ArchiveDefaults.CreateDefaultUnlockedArchiveComics();
+            List<SimulateTrainMonsterTable> simulateTrainBosses = TableReaderV2.Parse<SimulateTrainMonsterTable>()
+                .Where(row => row.NpcId.Count > 0)
+                .ToList();
+            // A zero-count record unlocks the archive's main entry without claiming a kill.
+            Dictionary<int, int> archiveMonsters = simulateTrainBosses
+                .Select(row => row.NpcId.First())
+                .Distinct()
+                .ToDictionary(npcId => npcId, _ => 0);
+            foreach ((int npcId, int killed) in player.ArchiveMonsterKills ?? [])
+            {
+                if (npcId > 0 && killed > 0)
+                    archiveMonsters[npcId] = killed;
+            }
 
             return new NotifyArchiveLoginData
             {
+                Monsters = archiveMonsters
+                    .OrderBy(record => record.Key)
+                    .Select(record => new NotifyArchiveLoginData.NotifyArchiveLoginDataMonster
+                    {
+                        Id = checked((uint)record.Key),
+                        Killed = record.Value
+                    })
+                    .ToList(),
+                MonsterUnlockIds = simulateTrainBosses
+                    .Select(row => (uint)row.Id)
+                    .Distinct()
+                    .Order()
+                    .ToList(),
                 UnlockComics = unlockComics
             };
         }

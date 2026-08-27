@@ -101,6 +101,11 @@ namespace AscNet.Test
                     ValidateAssignCompatibility();
                     return;
                 }
+                if (args.Contains("--simulate-train-compat-only"))
+                {
+                    ValidateSimulateTrainCompatibility();
+                    return;
+                }
                 if (args.Contains("--transfinite-compat-only"))
                 {
                     ValidateTransfiniteCompatibility();
@@ -24595,7 +24600,9 @@ namespace AscNet.Test
             {
                 AssertIntegerList(
                     expectedMonsterLevels.Select(level => (long)level).ToArray(),
-                    preFightResponse.FightData.MonsterLevel.Select(level => (long)level).ToArray(),
+                    (preFightResponse.FightData.MonsterLevel
+                        ?? throw new InvalidDataException($"{name} MonsterLevel was nil."))
+                        .Select(level => (long)level).ToArray(),
                     $"{name} MonsterLevel");
             }
             AssertPreFightDoesNotDeployCharacter(
@@ -27091,8 +27098,10 @@ namespace AscNet.Test
             AssertEqual(0, repeatChallengePreFight.Code, "Simulated Battlefield PreFightResponse Code");
             AssertEqual(30_090_802U, repeatChallengePreFight.FightData.StageId, "Simulated Battlefield PreFightResponse StageId");
             AssertEqual(0, repeatChallengePreFight.FightData.RebootId, "Simulated Battlefield PreFightResponse RebootId");
-            if (!repeatChallengePreFight.FightData.MonsterLevel.SequenceEqual([357, 252, 197]))
-                throw new InvalidDataException($"Simulated Battlefield PreFightResponse MonsterLevel: expected 357,252,197, got {string.Join(",", repeatChallengePreFight.FightData.MonsterLevel)}.");
+            List<int> repeatChallengeMonsterLevels = repeatChallengePreFight.FightData.MonsterLevel
+                ?? throw new InvalidDataException("Simulated Battlefield PreFightResponse MonsterLevel was nil.");
+            if (!repeatChallengeMonsterLevels.SequenceEqual([357, 252, 197]))
+                throw new InvalidDataException($"Simulated Battlefield PreFightResponse MonsterLevel: expected 357,252,197, got {string.Join(",", repeatChallengeMonsterLevels)}.");
             AssertEqual(51201, Convert.ToInt32(repeatChallengePreFight.FightData.EventIds.Single()), "Simulated Battlefield Authority Level 1 effect");
             AssertEqual("2", repeatChallengePreFight.FightData.CustomData, "Simulated Battlefield two-attempt wave count");
             JArray battlefieldNpcGroups = JArray.FromObject(repeatChallengePreFight.FightData.NpcGroupList);
