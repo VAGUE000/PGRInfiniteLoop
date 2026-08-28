@@ -9,6 +9,7 @@ using AscNet.Table.V2.share.character.enhanceskill;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.headportrait;
 using AscNet.Table.V2.share.fashion;
+using AscNet.Table.V2.share.robot;
 using MessagePack;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -33,8 +34,81 @@ internal partial class Program
 
         ValidateVersion47FashionUseCompatibility();
         ValidateVersion47CharacterHeadSelectionCompatibility();
-
         ValidateVersion47EffulgenceSkillProgressionCompatibility();
+        ValidateVersion47GeneralSkillPreFightCompatibility();
+    }
+
+    private static void ValidateVersion47GeneralSkillPreFightCompatibility()
+    {
+        const long playerId = 48_107;
+        CharacterGeneralSkillTable validGeneralSkill = TableReaderV2.Parse<CharacterGeneralSkillTable>()
+            .First(row => row.IsSkipSkillCheck == 0 && row.SkillId.Any(id => id > 0));
+        int requiredSkillIndex = validGeneralSkill.SkillId.FindIndex(id => id > 0);
+        int requiredSkillId = validGeneralSkill.SkillId[requiredSkillIndex];
+        int requiredSkillLevel = validGeneralSkill.SkillLevel[requiredSkillIndex];
+        CharacterSkillTable skillRow = TableReaderV2.Parse<CharacterSkillTable>()
+            .First(row => row.SkillGroupId.Any(groupId =>
+                TableReaderV2.Parse<CharacterSkillGroupTable>().Find(group => group.Id == groupId)?.SkillId.Contains(requiredSkillId) == true));
+        int unownedGeneralSkill = TableReaderV2.Parse<CharacterGeneralSkillTable>()
+            .First(row => row.Id != validGeneralSkill.Id
+                && row.IsSkipSkillCheck == 0
+                && row.SkillId.Any(id => id > 0)
+                && !row.SkillId.Contains(requiredSkillId)).Id;
+        int validEventId = (int)RequiredMethod(
+            RequiredAscNetGameServerType("AscNet.GameServer.Handlers.FightModule"),
+            "GeneralSkillFightEventId", BindingFlags.Static | BindingFlags.NonPublic, [typeof(int)])
+            .Invoke(null, [validGeneralSkill.Id])!;
+        int invalidEventId = (int)RequiredMethod(
+            RequiredAscNetGameServerType("AscNet.GameServer.Handlers.FightModule"),
+            "GeneralSkillFightEventId", BindingFlags.Static | BindingFlags.NonPublic, [typeof(int)])
+            .Invoke(null, [unownedGeneralSkill])!;
+        RobotTable robot = TableReaderV2.Parse<RobotTable>().First();
+        Character roster = CreateDrawCompatibilityCharacter(playerId);
+        roster.Characters =
+        [
+            new CharacterData
+            {
+                Id = (uint)skillRow.CharacterId,
+                Level = 80,
+                SkillList = [new CharacterSkill { Id = (uint)requiredSkillId, Level = requiredSkillLevel }]
+            }
+        ];
+        using LoopbackSessionHarness harness = new(
+            roster, CreateDrawCompatibilityPlayer(playerId),
+            CreateDrawCompatibilityInventory(playerId, []), "v47-general-skill-prefight");
+
+        PreFightRequest request = new()
+        {
+            PreFightData = new()
+            {
+                StageId = 0,
+                CardIds = [(uint)skillRow.CharacterId],
+                RobotIds = [robot.Id],
+                GeneralSkill = validGeneralSkill.Id
+            }
+        };
+        InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, 12_701, request);
+        PreFightResponse validResponse = ReadResponsePayload<PreFightResponse>(
+            harness, 12_701, nameof(PreFightResponse), "GeneralSkill valid PreFight");
+        AssertEqual(0, validResponse.Code, "GeneralSkill valid PreFight code");
+        AssertEqual(true, validResponse.FightData.EventIds.Select(Convert.ToInt32).Contains(validEventId),
+            "GeneralSkill valid PreFight appends event id");
+        PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData role =
+            validResponse.FightData.RoleData.Single(row => row.Id == (uint)playerId);
+        AssertEqual(2, role.NpcData.Count, "GeneralSkill robot PreFight constructs both deployments");
+        System.Collections.IDictionary robotNpc = role.NpcData.Values
+            .Select(value => RequiredDynamicMap((object?)value, "GeneralSkill robot NPC"))
+            .Single(npc => npc.Contains("RobotId"));
+        AssertEqual(robot.Id, RequiredDynamicInteger(robotNpc, "RobotId", "GeneralSkill robot NPC"),
+            "GeneralSkill robot PreFight preserves RobotId");
+
+        request.PreFightData.GeneralSkill = unownedGeneralSkill;
+        InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, 12_702, request);
+        PreFightResponse invalidResponse = ReadResponsePayload<PreFightResponse>(
+            harness, 12_702, nameof(PreFightResponse), "GeneralSkill invalid PreFight");
+        AssertEqual(0, invalidResponse.Code, "GeneralSkill invalid selection still authorizes PreFight");
+        AssertEqual(false, invalidResponse.FightData.EventIds.Select(Convert.ToInt32).Contains(invalidEventId),
+            "GeneralSkill unowned selection does not append event id");
     }
 
     private static void ValidateVersion47HeadEquipValidation()

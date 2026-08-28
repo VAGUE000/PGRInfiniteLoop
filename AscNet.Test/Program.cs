@@ -27689,8 +27689,8 @@ namespace AscNet.Test
                                     {
                                         [1] = new Dictionary<object, object>
                                         {
-                                            ["Value"] = bossHp,
-                                            ["MaxValue"] = 100
+                                            ["Value"] = bossHp * 10_000,
+                                            ["MaxValue"] = 1_000_000
                                         }
                                     },
                                     BuffIds = []
@@ -28220,7 +28220,9 @@ namespace AscNet.Test
             int coefficientIndex = selectedLevel - 1;
             int expectedBossScore = Math.Min(
                 normalStage.BossLoseHpScore,
-                100 * normalRule.BossLoseHpScore[coefficientIndex]);
+                checked((int)Math.Floor(
+                    1d / double.Parse(normalRule.BossLoseHp[coefficientIndex], CultureInfo.InvariantCulture)
+                    * normalRule.BossLoseHpScore[coefficientIndex])));
             double timeCoefficient = double.Parse(
                 normalRule.LeftTimeScore[coefficientIndex],
                 CultureInfo.InvariantCulture);

@@ -851,8 +851,9 @@ namespace AscNet.GameServer.Handlers
             int levelType,
             int stageStatus)
         {
-            int coefficientIndex = Math.Clamp(levelType - 1, 0, rule.BossLoseHpScore.Count - 1);
-            double bossCoefficient = rule.BossLoseHpScore[coefficientIndex];
+            int coefficientIndex = Math.Clamp(levelType - 1, 0, rule.BossLoseHp.Count - 1);
+            double bossStep = ParseCoefficient(rule.BossLoseHp, coefficientIndex);
+            double bossPoints = rule.BossLoseHpScore[coefficientIndex];
             double timeCoefficient = ParseCoefficient(rule.LeftTimeScore, coefficientIndex);
             double hpCoefficient = ParseCoefficient(rule.CharLeftHpSocre, coefficientIndex);
 
@@ -866,11 +867,12 @@ namespace AscNet.GameServer.Handlers
                     .FirstOrDefault();
             double bossMaximumHp = boss is null ? 0 : AttributeValue(boss, "MaxValue");
             double bossCurrentHp = boss is null ? 0 : AttributeValue(boss, "Value");
-            int bossDamagePer = bossMaximumHp <= 0
-                ? (settle.IsWin ? 100 : 0)
-                : Math.Clamp((int)Math.Floor((bossMaximumHp - bossCurrentHp) * 100d / bossMaximumHp), 0, 100);
-            int bossScore = Math.Min(stage.BossLoseHpScore, checked((int)Math.Floor(bossDamagePer * bossCoefficient)));
-
+            double bossLostHp = Math.Max(0, bossMaximumHp - bossCurrentHp);
+            double bossLostRatio = bossMaximumHp <= 0
+                ? (settle.IsWin ? 1d : 0d)
+                : Math.Clamp(bossLostHp / bossMaximumHp, 0d, 1d);
+            int bossDamagePer = checked((int)Math.Floor(bossLostRatio * 100d));
+            int bossScore = ScoreBySteps(bossLostRatio, bossStep, bossPoints, stage.BossLoseHpScore);
             int passTime = Math.Max(1, stage.PassTimeLimit);
             int timeLeft = Math.Clamp(checked((int)settle.LeftTime), 0, passTime);
             double timeRatio = timeLeft / (double)passTime;
@@ -1122,7 +1124,17 @@ namespace AscNet.GameServer.Handlers
             if (stageType == 2)
                 return TryResolveCatalogStage(4, stageId, false, out sectionId);
             if (stageType == 4)
+            {
+                // Intensive Battle uses the table-selected ultimate-zone section once unlocked.
+                (int LevelType, int SectionId, int FeatureGroupId)? challenge =
+                    ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
+                if (challenge is not null && ResolveSection(challenge.Value.SectionId, false).StageId.Contains(stageId))
+                {
+                    sectionId = challenge.Value.SectionId;
+                    return true;
+                }
                 return TryResolveCatalogStage(8, stageId, true, out sectionId);
+            }
             return false;
         }
 
@@ -1403,6 +1415,13 @@ namespace AscNet.GameServer.Handlers
             if (attribute is JObject json && json.TryGetValue(key, out JToken? token))
                 return token.Value<double>();
             return 0;
+        }
+
+        private static int ScoreBySteps(double value, double step, double points, int maximum)
+        {
+            if (step <= 0 || points <= 0 || value <= 0)
+                return 0;
+            return Math.Min(maximum, checked((int)Math.Floor(value / step * points)));
         }
 
         private static double ParseCoefficient(IReadOnlyList<string> values, int index)

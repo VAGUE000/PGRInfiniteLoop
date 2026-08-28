@@ -721,6 +721,8 @@ namespace AscNet.GameServer.Handlers
             BossInshotModule.PrepareLogin(session.player, DateTimeOffset.UtcNow);
             FashionStoryModule.PrepareLogin(session.player, DateTimeOffset.UtcNow);
             TransfiniteModule.PrepareLogin(session, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            if (Common.Common.config.SkipCommonGuides)
+                GuideModule.SkipCommonGuides(session.player);
             GuideModule.ReconcileStageCompletedGuides(session.player, session.stage);
             List<TimeLimitCtrlConfigList> timeLimitControls = BuildTimeLimitControlConfigList();
             NotifyLogin notifyLogin = new()

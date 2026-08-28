@@ -299,6 +299,7 @@ namespace AscNet.GameServer.Handlers
     {
         private const int TeamManagerSetTeamParaError = 20004003;
         private const int FightAuthorizationError = 1033;
+        private const int GeneralSkillFightEventOffset = 5000;
         private enum TeamPrefabValidationFailure
         {
             None,
@@ -658,6 +659,7 @@ namespace AscNet.GameServer.Handlers
                 .NpcData;
 
             long currentUnixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            List<CharacterData> deployedCharacters = new();
             for (int i = 0; i < cardIdsToDeploy.Count; i++)
             {
                 uint cardId = cardIdsToDeploy[i];
@@ -685,6 +687,7 @@ namespace AscNet.GameServer.Handlers
                     ?.Id ?? 0;
                 if (isOwnedCharacter)
                     characterData = ApplyRandomFashion(session, characterData, preserveRandomFashionRoll, ref weaponFashionId);
+                deployedCharacters.Add(characterData);
 
 
                 PartnerData? partner = session.character.Partners.FirstOrDefault(x => x.CharacterId == characterData.Id);
@@ -743,29 +746,31 @@ namespace AscNet.GameServer.Handlers
                         });
                     }
 
+                    CharacterData robotCharacterData = new()
+                    {
+                        Id = (uint)Convert.ToInt32(robot.CharacterId),
+                        Level = Convert.ToInt32(robot.CharacterLevel),
+                        Exp = 0,
+                        Quality = Convert.ToInt32(robot.CharacterQuality),
+                        InitQuality = Convert.ToInt32(robot.CharacterQuality),
+                        Star = Convert.ToInt32(robot.CharacterStar),
+                        Grade = Convert.ToInt32(robot.CharacterGrade),
+                        SkillList = skills.Where(x => !removedSkillIds.Contains(x)).Select(x => new CharacterSkill() { Id = (uint)x, Level = Math.Min(Convert.ToInt32(robot.SkillLevel), TableReaderV2.Parse<CharacterSkillLevelEffectTable>().OrderByDescending(x => x.Level).FirstOrDefault(y => y.SkillId == x)?.Level ?? 1) }).ToList(),
+                        FashionId = fashionId,
+                        CreateTime = 0,
+                        TrustLv = 1,
+                        TrustExp = 0,
+                        Ability = robot.ShowAbility ?? 0,
+                        LiberateLv = robot.LiberateLv ?? 0,
+                        CharacterHeadInfo = new()
+                        {
+                            HeadFashionId = fashionId
+                        }
+                    };
+                    deployedCharacters.Add(robotCharacterData);
                     playerNpcData.Add(npcKey, new
                     {
-                        Character = new CharacterData()
-                        {
-                            Id = (uint)Convert.ToInt32(robot.CharacterId),
-                            Level = Convert.ToInt32(robot.CharacterLevel),
-                            Exp = 0,
-                            Quality = Convert.ToInt32(robot.CharacterQuality),
-                            InitQuality = Convert.ToInt32(robot.CharacterQuality),
-                            Star = Convert.ToInt32(robot.CharacterStar),
-                            Grade = Convert.ToInt32(robot.CharacterGrade),
-                            SkillList = skills.Where(x => !removedSkillIds.Contains(x)).Select(x => new CharacterSkill() { Id = (uint)x, Level = Math.Min(Convert.ToInt32(robot.SkillLevel), TableReaderV2.Parse<CharacterSkillLevelEffectTable>().OrderByDescending(x => x.Level).FirstOrDefault(y => y.SkillId == x)?.Level ?? 1) }).ToList(),
-                            FashionId = fashionId,
-                            CreateTime = 0,
-                            TrustLv = 1,
-                            TrustExp = 0,
-                            Ability = robot.ShowAbility ?? 0,
-                            LiberateLv = robot.LiberateLv ?? 0,
-                            CharacterHeadInfo = new()
-                            {
-                                HeadFashionId = fashionId
-                            }
-                        },
+                        Character = robotCharacterData,
                         Equips = equips,
                         WeaponFashionId = robot.WeaponFashion ?? 0,
                         Partner = (PartnerData?)null,
@@ -775,6 +780,11 @@ namespace AscNet.GameServer.Handlers
                     });
                     npcKey++;
                 }
+            }
+            if (req.PreFightData.GeneralSkill > 0
+                && IsValidGeneralSkill(req.PreFightData.GeneralSkill, deployedCharacters))
+            {
+                rsp.FightData.EventIds.Add(GeneralSkillFightEventId(req.PreFightData.GeneralSkill));
             }
 
             if (isTheatreFight)
@@ -1929,6 +1939,9 @@ namespace AscNet.GameServer.Handlers
             };
             return true;
         }
+
+        internal static int GeneralSkillFightEventId(int generalSkillId) =>
+            GeneralSkillFightEventOffset + generalSkillId;
 
         private static bool IsValidCharacterSwitchSkill(CharacterData character, int skillId)
         {
