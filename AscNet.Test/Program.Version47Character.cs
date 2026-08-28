@@ -7,6 +7,7 @@ using AscNet.Common.Util;
 using AscNet.Table.V2.share.character;
 using AscNet.Table.V2.share.character.enhanceskill;
 using AscNet.Table.V2.share.character.skill;
+using AscNet.Table.V2.share.condition;
 using AscNet.Table.V2.share.headportrait;
 using AscNet.Table.V2.share.fashion;
 using AscNet.Table.V2.share.robot;
@@ -32,10 +33,82 @@ internal partial class Program
         ValidateVersion47HeadEquipValidation();
         ValidateVersion47HeadTimeoutReconciliation();
 
-        ValidateVersion47FashionUseCompatibility();
         ValidateVersion47CharacterHeadSelectionCompatibility();
         ValidateVersion47GeneralSkillPreFightCompatibility();
         ValidateVersion47ObserverPreFightCompatibility();
+        ValidateVersion47QualityGatedSkillReconciliation();
+    }
+
+    private static void ValidateVersion47QualityGatedSkillReconciliation()
+    {
+        List<(CharacterSkillTable Character, uint SkillId, int FirstQuality, int SecondQuality)> candidates =
+            (from character in TableReaderV2.Parse<CharacterSkillTable>()
+             from groupId in character.SkillGroupId.Where(id => id > 0).Distinct()
+             let groupRow = TableReaderV2.Parse<CharacterSkillGroupTable>().FirstOrDefault(row => row.Id == groupId)
+             let candidateSkillId = (uint)(groupRow?.SkillId.FirstOrDefault() ?? 0)
+             let upgrades = TableReaderV2.Parse<CharacterSkillUpgradeTable>().Where(row => row.SkillId == (int)candidateSkillId).ToList()
+             let gated = upgrades.Where(row => row.Level is 0 or 1 && row.ConditionId is { Count: > 0 }).OrderBy(row => row.Level).ToList()
+             let qualities = gated.Select(row => row.ConditionId
+                 .Select(id => TableReaderV2.Parse<ConditionTable>().FirstOrDefault(condition => condition.Id == id))
+                 .Where(condition => condition is not null && condition.Type == 13105 && condition.Params.Count > 0)
+                 .Select(condition => condition!.Params[0])
+                 .DefaultIfEmpty(-1)
+                 .Max()).ToList()
+             where candidateSkillId > 0
+                 && Character.CharacterSkillMaxLevel((int)candidateSkillId) == 2
+                 && gated.Count >= 2
+                 && qualities.Count >= 2
+                 && qualities[0] >= 0
+                 && qualities[1] > qualities[0]
+             select (character, candidateSkillId, qualities[0], qualities[1])).ToList();
+        (CharacterSkillTable characterRow, uint skillId, int firstQuality, int secondQuality) = candidates.First();
+
+        AscNet.Common.Database.Character lockedRoster = CreateTestCharacterRoster(characterRow.CharacterId, 80);
+        CharacterData locked = RequiredCharacterData(lockedRoster, characterRow.CharacterId);
+        locked.Quality = Math.Max(0, firstQuality - 1);
+        locked.SkillList.RemoveAll(skill => skill.Id == skillId);
+        lockedRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(false, locked.SkillList.Any(skill => skill.Id == skillId), "quality-gated skill stays absent below first gate");
+
+        AscNet.Common.Database.Character intermediateRoster = CreateTestCharacterRoster(characterRow.CharacterId, 80);
+        CharacterData intermediate = RequiredCharacterData(intermediateRoster, characterRow.CharacterId);
+        intermediate.Quality = firstQuality;
+        intermediate.Star = int.MaxValue;
+        intermediate.SkillList.RemoveAll(skill => skill.Id == skillId);
+        intermediateRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(1, intermediate.SkillList.Single(skill => skill.Id == skillId).Level, "quality-gated skill reaches intermediate rank");
+
+        AscNet.Common.Database.Character maxRoster = CreateTestCharacterRoster(characterRow.CharacterId, 80);
+        CharacterData max = RequiredCharacterData(maxRoster, characterRow.CharacterId);
+        max.Quality = secondQuality;
+        max.Star = int.MaxValue;
+        max.SkillList.RemoveAll(skill => skill.Id == skillId);
+        max.SkillList.Add(new CharacterSkill { Id = skillId, Level = 1 });
+        maxRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(2, max.SkillList.Single(skill => skill.Id == skillId).Level, "quality-gated skill reaches max rank");
+
+        CharacterSkill maxSkill = max.SkillList.Single(skill => skill.Id == skillId);
+        bool changed = maxRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(false, changed, "quality-gated normalization is idempotent");
+        AssertEqual(2, maxSkill.Level, "quality-gated max level remains stable");
+
+        var ordinaryCandidate = (from character in TableReaderV2.Parse<CharacterSkillTable>()
+                                 from groupId in character.SkillGroupId.Where(id => id > 0)
+                                 let groupRow = TableReaderV2.Parse<CharacterSkillGroupTable>()
+                                     .FirstOrDefault(candidateGroup => candidateGroup.Id == groupId)
+                                 from ordinarySkillId in groupRow?.SkillId.Take(1) ?? []
+                                 where !TableReaderV2.Parse<CharacterSkillUpgradeTable>()
+                                     .Any(row => row.SkillId == ordinarySkillId && row.Level == 0 && row.ConditionId is { Count: > 0 })
+                                 select (character.CharacterId, SkillId: (uint)ordinarySkillId)).First();
+        AscNet.Common.Database.Character ordinaryRoster =
+            CreateTestCharacterRoster(ordinaryCandidate.CharacterId, 80);
+        CharacterData ordinaryCharacter =
+            RequiredCharacterData(ordinaryRoster, ordinaryCandidate.CharacterId);
+        CharacterSkill ordinary = ordinaryCharacter.SkillList.Single(skill => skill.Id == ordinaryCandidate.SkillId);
+        int ordinaryLevel = ordinary.Level;
+        ordinaryRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(ordinaryLevel, ordinaryCharacter.SkillList.Single(skill => skill.Id == ordinary.Id).Level,
+            "conditionless ordinary skill is preserved");
     }
 
     private static void ValidateVersion47ObserverPreFightCompatibility()
@@ -112,6 +185,22 @@ internal partial class Program
             "ResolveCharacterCareer", BindingFlags.Static | BindingFlags.NonPublic,
             [typeof(int)]).Invoke(null, [observerRow.Id])!,
             "ordinary career resolver is table-backed");
+        int physicalElement = TableReaderV2.Parse<CharacterElementTable>()
+            .First(row => row.ElementName == "Physical").Id;
+        CharacterTable[] physicalCharacters = TableReaderV2.Parse<CharacterTable>()
+            .Where(row => row.Id != observerRow.Id && row.Element == physicalElement)
+            .Take(2)
+            .ToArray();
+        AssertEqual(2, physicalCharacters.Length, "authoritative table provides multiple Physical characters");
+        Dictionary<int, int> duplicatePhysicalMagic = (Dictionary<int, int>)buildMagicIds.Invoke(
+            null, [new[]
+            {
+                unlocked,
+                new CharacterData { Id = (uint)physicalCharacters[0].Id },
+                new CharacterData { Id = (uint)physicalCharacters[1].Id }
+            }, unlocked])!;
+        AssertEqual(0, duplicatePhysicalMagic.Count,
+            "Observer rejects teams containing multiple table-selected Physical characters");
     }
 
     private static void ValidateVersion47GeneralSkillPreFightCompatibility()

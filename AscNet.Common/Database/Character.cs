@@ -703,71 +703,97 @@ namespace AscNet.Common.Database
             IReadOnlyDictionary<int, IReadOnlyList<uint>> skillIdsByGroupId)
         {
             List<CharacterSkill> normalizedSkills = new();
+            Dictionary<int, IReadOnlyList<CharacterSkillUpgradeTable>> upgradesBySkillId = TableReaderV2
+                .Parse<CharacterSkillUpgradeTable>()
+                .GroupBy(upgrade => upgrade.SkillId)
+                .ToDictionary(group => group.Key, group => (IReadOnlyList<CharacterSkillUpgradeTable>)group.ToArray());
             foreach (int skillGroupId in characterSkill.SkillGroupId.Where(skillGroupId => skillGroupId > 0).Distinct())
             {
                 if (!skillIdsByGroupId.TryGetValue(skillGroupId, out IReadOnlyList<uint>? groupSkillIds))
                     continue;
-
-                CharacterSkill? selectedSkill = existingSkills?
-                    .LastOrDefault(skill => groupSkillIds.Contains(skill.Id));
+                CharacterSkill? selectedSkill = existingSkills?.LastOrDefault(skill => groupSkillIds.Contains(skill.Id));
                 if (selectedSkill is not null)
                 {
-                    // Persisted, valid skills survive a currently unmet initial condition.
                     int maxLevel = CharacterSkillMaxLevel((int)selectedSkill.Id);
                     if (maxLevel > 0 && selectedSkill.Level > maxLevel)
-                        selectedSkill.Level = maxLevel;
-                    normalizedSkills.Add(selectedSkill);
-                    continue;
+                        normalizedSkills.Add(new CharacterSkill { Id = selectedSkill.Id, Level = maxLevel });
+                    else
+                        normalizedSkills.Add(selectedSkill);
                 }
-
-                uint defaultSkillId = groupSkillIds.FirstOrDefault();
-                CharacterSkillUpgradeTable? initialUpgrade = defaultSkillId > 0
-                    ? TableReaderV2.Parse<CharacterSkillUpgradeTable>()
-                        .FirstOrDefault(upgrade => upgrade.SkillId == (int)defaultSkillId && upgrade.Level == 0)
-                    : null;
-                if (initialUpgrade is not null && !MeetsCharacterSkillCondition(character, initialUpgrade.ConditionId))
-                    continue;
-
-                if (defaultSkillId > 0)
+                else if (groupSkillIds.FirstOrDefault() is uint defaultSkillId && defaultSkillId > 0)
                 {
-                    normalizedSkills.Add(new CharacterSkill
-                    {
-                        Id = defaultSkillId,
-                        Level = 1
-                    });
+                    CharacterSkillUpgradeTable? initial = upgradesBySkillId.TryGetValue((int)defaultSkillId, out IReadOnlyList<CharacterSkillUpgradeTable>? defaultUpgrades)
+                        ? defaultUpgrades.FirstOrDefault(row => row.Level == 0)
+                        : null;
+                    if (initial is not null && !MeetsCharacterSkillCondition(character, initial.ConditionId))
+                        continue;
+                    normalizedSkills.Add(new CharacterSkill { Id = defaultSkillId, Level = 1 });
                 }
             }
-
+            ReconcileQualityGatedSkills(character, normalizedSkills, characterSkill, skillIdsByGroupId, upgradesBySkillId);
             return normalizedSkills;
         }
+
+        private static bool ReconcileQualityGatedSkills(
+            CharacterData character,
+            List<CharacterSkill> skills,
+            CharacterSkillTable characterSkill,
+            IReadOnlyDictionary<int, IReadOnlyList<uint>> skillIdsByGroupId,
+            IReadOnlyDictionary<int, IReadOnlyList<CharacterSkillUpgradeTable>> upgradesBySkillId)
+        {
+            bool changed = false;
+            foreach (int groupId in characterSkill.SkillGroupId.Where(id => id > 0).Distinct())
+            {
+                if (!skillIdsByGroupId.TryGetValue(groupId, out IReadOnlyList<uint>? groupSkillIds))
+                    continue;
+                uint skillId = groupSkillIds.FirstOrDefault();
+                if (skillId == 0 || !upgradesBySkillId.TryGetValue((int)skillId, out IReadOnlyList<CharacterSkillUpgradeTable>? upgrades)
+                    || !upgrades.Any(upgrade => upgrade.ConditionId is { Count: > 0 }))
+                    continue;
+
+                int targetLevel = 0;
+                for (int level = 0; ; level++)
+                {
+                    CharacterSkillUpgradeTable? upgrade = upgrades.FirstOrDefault(row => row.Level == level);
+                    if (upgrade is null || !MeetsCharacterSkillCondition(character, upgrade.ConditionId))
+                        break;
+                    targetLevel = level + 1;
+                }
+                int maxLevel = CharacterSkillMaxLevel((int)skillId);
+                if (maxLevel > 0)
+                    targetLevel = Math.Min(targetLevel, maxLevel);
+                CharacterSkill? current = skills.FirstOrDefault(skill => groupSkillIds.Contains(skill.Id));
+                if (current is null)
+                {
+                    if (targetLevel > 0)
+                    {
+                        skills.Add(new CharacterSkill { Id = skillId, Level = targetLevel });
+                        changed = true;
+                    }
+                }
+                else if (targetLevel > current.Level)
+                {
+                    int currentIndex = skills.IndexOf(current);
+                    skills[currentIndex] = new CharacterSkill { Id = current.Id, Level = targetLevel };
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
         public bool UnlockQualityGatedSkills(CharacterData character)
         {
             CharacterSkillTable? skillTable = TableReaderV2.Parse<CharacterSkillTable>()
                 .Find(row => row.CharacterId == character.Id);
             if (skillTable is null)
                 return false;
-
             Dictionary<int, IReadOnlyList<uint>> skillsByGroup = BuildCharacterSkillIdsByGroupId(
                 TableReaderV2.Parse<CharacterSkillGroupTable>());
-            bool changed = false;
-            foreach (int groupId in skillTable.SkillGroupId.Distinct())
-            {
-                if (!skillsByGroup.TryGetValue(groupId, out IReadOnlyList<uint>? skillIds)
-                    || character.SkillList.Any(skill => skillIds.Contains(skill.Id)))
-                    continue;
-
-                uint skillId = skillIds.FirstOrDefault();
-                CharacterSkillUpgradeTable? initial = TableReaderV2.Parse<CharacterSkillUpgradeTable>()
-                    .FirstOrDefault(row => row.SkillId == (int)skillId && row.Level == 0);
-                if (skillId == 0 || initial?.ConditionId.Count is not > 0
-                    || !MeetsCharacterSkillCondition(character, initial.ConditionId))
-                    continue;
-
-                character.SkillList.Add(new CharacterSkill { Id = skillId, Level = 1 });
-                changed = true;
-            }
-
-            return changed;
+            Dictionary<int, IReadOnlyList<CharacterSkillUpgradeTable>> upgradesBySkillId = TableReaderV2
+                .Parse<CharacterSkillUpgradeTable>()
+                .GroupBy(upgrade => upgrade.SkillId)
+                .ToDictionary(group => group.Key, group => (IReadOnlyList<CharacterSkillUpgradeTable>)group.ToArray());
+            return ReconcileQualityGatedSkills(character, character.SkillList, skillTable, skillsByGroup, upgradesBySkillId);
         }
 
 

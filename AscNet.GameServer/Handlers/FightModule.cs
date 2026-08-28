@@ -850,6 +850,11 @@ namespace AscNet.GameServer.Handlers
             TableReaderV2.Parse<CharacterCareerTable>()
                 .FirstOrDefault(row => row.Name == name)?.Type ?? 0;
 
+        private static int ResolveElementType(string name) =>
+            TableReaderV2.Parse<CharacterElementTable>()
+                .FirstOrDefault(row => row.ElementName == name)?.Id ?? 0;
+
+
         private static Dictionary<int, int> BuildObservationMagicIds(
             IEnumerable<CharacterData> team,
             CharacterData observer)
@@ -865,7 +870,7 @@ namespace AscNet.GameServer.Handlers
                         .FirstOrDefault(row => row.Id == member.Item1)?.Element ?? 0))
                 .ToList();
             if (members.Count(member => member.Career == "Observer") != 1
-                || members.Count(member => member.Element == 1) > 1)
+                || members.Count(member => member.Element == ResolveElementType("Physical")) > 1)
                 return [];
 
             int supportCareerCount = members.Count(member => member.Career is "Support" or "Amplifier");
