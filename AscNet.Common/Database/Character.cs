@@ -513,6 +513,7 @@ namespace AscNet.Common.Database
                 {
                     List<CharacterSkill> normalizedSkills = NormalizeCharacterSkills(
                         character.SkillList,
+                        character,
                         skillRow,
                         skillIdsByGroupId);
                     if (character.SkillList is null || !character.SkillList.SequenceEqual(normalizedSkills))
@@ -673,11 +674,11 @@ namespace AscNet.Common.Database
                 .Max();
         }
 
-        private static List<CharacterSkill> BuildInitialCharacterSkills(CharacterSkillTable characterSkill)
+        private static List<CharacterSkill> BuildInitialCharacterSkills(CharacterData character, CharacterSkillTable characterSkill)
         {
             Dictionary<int, IReadOnlyList<uint>> skillIdsByGroupId = BuildCharacterSkillIdsByGroupId(
                 TableReaderV2.Parse<CharacterSkillGroupTable>());
-            return NormalizeCharacterSkills(null, characterSkill, skillIdsByGroupId);
+            return NormalizeCharacterSkills(null, character, characterSkill, skillIdsByGroupId);
         }
 
         private static Dictionary<int, IReadOnlyList<uint>> BuildCharacterSkillIdsByGroupId(
@@ -697,6 +698,7 @@ namespace AscNet.Common.Database
 
         private static List<CharacterSkill> NormalizeCharacterSkills(
             IReadOnlyList<CharacterSkill>? existingSkills,
+            CharacterData character,
             CharacterSkillTable characterSkill,
             IReadOnlyDictionary<int, IReadOnlyList<uint>> skillIdsByGroupId)
         {
@@ -710,8 +712,7 @@ namespace AscNet.Common.Database
                     .LastOrDefault(skill => groupSkillIds.Contains(skill.Id));
                 if (selectedSkill is not null)
                 {
-                    // Clamp to the highest constructible level so skills over-leveled by an older
-                    // server cannot leave the character unconstructible on the client.
+                    // Persisted, valid skills survive a currently unmet initial condition.
                     int maxLevel = CharacterSkillMaxLevel((int)selectedSkill.Id);
                     if (maxLevel > 0 && selectedSkill.Level > maxLevel)
                         selectedSkill.Level = maxLevel;
@@ -720,6 +721,13 @@ namespace AscNet.Common.Database
                 }
 
                 uint defaultSkillId = groupSkillIds.FirstOrDefault();
+                CharacterSkillUpgradeTable? initialUpgrade = defaultSkillId > 0
+                    ? TableReaderV2.Parse<CharacterSkillUpgradeTable>()
+                        .FirstOrDefault(upgrade => upgrade.SkillId == (int)defaultSkillId && upgrade.Level == 0)
+                    : null;
+                if (initialUpgrade is not null && !MeetsCharacterSkillCondition(character, initialUpgrade.ConditionId))
+                    continue;
+
                 if (defaultSkillId > 0)
                 {
                     normalizedSkills.Add(new CharacterSkill
@@ -942,7 +950,6 @@ namespace AscNet.Common.Database
             CharacterTable? character = TableReaderV2.Parse<CharacterTable>().Find(x => x.Id == id);
             CharacterSkillTable? characterSkill = TableReaderV2.Parse<CharacterSkillTable>().Find(x => x.CharacterId == id);
             CharacterQualityTable? characterQuality = TableReaderV2.Parse<CharacterQualityTable>().OrderBy(x => x.Quality).FirstOrDefault(x => x.CharacterId == id);
-            
             if (!IsOwnableCharacter(id) || character is null || characterSkill is null || characterQuality is null)
             {
                 // CharacterManagerGetCharacterDataNotFound
@@ -976,8 +983,7 @@ namespace AscNet.Common.Database
                 }
             };
 
-            characterData.SkillList.AddRange(BuildInitialCharacterSkills(characterSkill));
-
+            characterData.SkillList.AddRange(BuildInitialCharacterSkills(characterData, characterSkill));
             if (character.DefaultNpcFashtionId > 0)
             {
                 FashionList fashion = new()

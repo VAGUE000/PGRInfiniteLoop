@@ -76,31 +76,50 @@ internal static partial class Program
             control.Value<long>("Id") is >= 49_905 and <= 49_910
             && control.Value<long>("StartTime") <= now.ToUnixTimeSeconds()
             && now.ToUnixTimeSeconds() < control.Value<long>("EndTime")).Value<int>("Id");
-        int progressTaskId = AscNet.Common.Util.TableReaderV2
-            .Parse<AscNet.Table.V2.share.passport.PassportTaskGroupTable>()
-            .Single(group => group.TimeId == activeRoundTimeId).TaskId!.First();
-        AscNet.Table.V2.share.task.TaskTable progressTask =
+        AscNet.Table.V2.share.passport.PassportTaskGroupTable activeRound =
+            AscNet.Common.Util.TableReaderV2.Parse<AscNet.Table.V2.share.passport.PassportTaskGroupTable>()
+                .Single(group => group.TimeId == activeRoundTimeId);
+        List<AscNet.Table.V2.share.task.TaskTable> roundTasks =
             AscNet.Common.Util.TableReaderV2.Parse<AscNet.Table.V2.share.task.TaskTable>()
-                .First(task => task.Id == progressTaskId);
-        AscNet.Table.V2.share.task.ConditionTable progressCondition =
+                .Where(task => activeRound.TaskId!.Contains(task.Id))
+                .ToList();
+        Dictionary<int, AscNet.Table.V2.share.task.ConditionTable> roundConditions =
             AscNet.Common.Util.TableReaderV2.Parse<AscNet.Table.V2.share.task.ConditionTable>()
-                .First(condition => condition.Id == progressTask.Condition);
-        RequiredMethod(
+                .Where(condition => condition.Type is 15216 or 25005 or 28005
+                    && roundTasks.Any(task => task.Condition == condition.Id))
+                .ToDictionary(condition => condition.Type!.Value);
+        MethodInfo recordStageClear = RequiredMethod(
             RequiredAscNetGameServerType("AscNet.GameServer.Handlers.TaskModule"),
             "RecordStageClear",
             BindingFlags.Static | BindingFlags.Public,
-            [typeof(Session), typeof(int), typeof(int), typeof(int)])
-            .Invoke(null, [harness.Session, 30_300_000, progressTask.Result ?? 1, 0]);
-        AssertEqual(
-            (long)(progressTask.Result ?? 1),
-            (long)player.MissionProgress.ConditionCounters.GetValueOrDefault(progressTask.Condition),
-            "Passport persisted mission counter");
-        JObject progressPush = ReadPushMapPayload(harness, nameof(NotifyTask), "Passport progress task sync");
-        JToken syncedProgress = progressPush["Tasks"]!["Tasks"]!
-            .Single(task => task.Value<int>("Id") == progressTaskId);
-        AssertEqual((long)(progressTask.Result ?? 1), syncedProgress["Schedule"]![0]!.Value<long>("Value"),
-            "Passport mission progress value");
-        AssertEqual(3, syncedProgress.Value<int>("State"), "Passport mission achieved state");
+            [typeof(Session), typeof(int), typeof(int), typeof(int), typeof(bool)]);
+        MethodInfo recordArenaResult = RequiredMethod(
+            RequiredAscNetGameServerType("AscNet.GameServer.Handlers.TaskModule"),
+            "RecordArenaResult",
+            BindingFlags.Static | BindingFlags.Public,
+            [typeof(Session), typeof(int), typeof(bool)]);
+        int painCageStageId = AscNet.Common.Util.TableReaderV2
+            .Parse<AscNet.Table.V2.share.fuben.bosssingle.BossSingleStageTable>().First().StageId;
+        int siegeStageId = AscNet.Common.Util.TableReaderV2
+            .Parse<AscNet.Table.V2.share.guild.boss.GuildBossStageCatalogTable>().First().StageId;
+        foreach ((int conditionType, Action<bool> record) in new (int, Action<bool>)[]
+        {
+            (25005, first => recordStageClear.Invoke(null, [harness.Session, painCageStageId, 1, 0, first])),
+            (28005, first => recordArenaResult.Invoke(null, [harness.Session, 0, first])),
+            (15216, first => recordStageClear.Invoke(null, [harness.Session, siegeStageId, 1, 0, first]))
+        })
+        {
+            AscNet.Table.V2.share.task.ConditionTable condition = roundConditions[conditionType];
+            record(true);
+            AssertEqual(1, player.MissionProgress.ConditionCounters.GetValueOrDefault(condition.Id),
+                $"Passport first-clear condition {conditionType}");
+            record(false);
+            AssertEqual(1, player.MissionProgress.ConditionCounters.GetValueOrDefault(condition.Id),
+                $"Passport repeated-clear condition {conditionType}");
+        }
+        while (harness.TryReadAvailablePacket("Passport mission progress push", out _))
+        {
+        }
         AssertIntegerList([136], loginData.PassportInfos.Select(info => (long)info.Id).ToArray(),
             "Passport initial free tier");
 

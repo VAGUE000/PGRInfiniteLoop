@@ -2312,7 +2312,9 @@ namespace AscNet.GameServer.Handlers
             uint responseStageId = ResolveFightSettleStageId(session, req);
             StageDatum? previousStageData = session.stage?.Stages.TryGetValue(responseStageId, out StageDatum? existingStageData) == true ? existingStageData : null;
             bool isQuickClear = responseStageId != req.Result.StageId;
-            bool isFirstClear = previousStageData is null;
+            bool isFirstClear = ArenaModule.IsArenaStage(req.Result.StageId)
+                ? !session.player.SimulatedBattlefield.ArenaStageMaxPoints.ContainsKey(req.Result.StageId)
+                : previousStageData is null || !previousStageData.Passed;
             bool isSuccessfulSettle = req.Result.IsWin && !req.Result.IsForceExit;
             if (TransfiniteModule.TrySettle(session, req.Result, out FightSettleResponse transfiniteResponse))
             {
@@ -2369,7 +2371,7 @@ namespace AscNet.GameServer.Handlers
                 && session.fight?.PreFight.PreFightData.SelectAreaId > 0
                 && ArenaModule.RecordFightResult(session, req.Result) is ArenaResult arenaDeathResult)
             {
-                TaskModule.RecordArenaResult(session, arenaDeathResult.Point);
+                TaskModule.RecordArenaResult(session, arenaDeathResult.Point, isFirstClear);
                 session.fight = null;
                 session.SendResponse(new FightSettleResponse
                 {
@@ -2559,7 +2561,7 @@ namespace AscNet.GameServer.Handlers
                     : null;
             if (arenaResult is not null)
             {
-                TaskModule.RecordArenaResult(session, arenaResult.Point);
+                TaskModule.RecordArenaResult(session, arenaResult.Point, isFirstClear);
             }
 
             NotifyArchiveMonsterRecord? simulateTrainArchiveRecord = SimulateTrainModule.RecordArchiveKill(
@@ -2628,7 +2630,7 @@ namespace AscNet.GameServer.Handlers
                 session.SendPush(RepeatChallengeModule.BuildExpChange(session.player));
             if (updatedTrial)
                 session.SendPush(TrialModule.BuildLoginData(session.player));
-            TaskModule.RecordStageClear(session, (int)req.Result.StageId, challengeCount);
+            TaskModule.RecordStageClear(session, (int)req.Result.StageId, challengeCount, 0, isFirstClear);
             GuideModule.CompleteOpenedGuideOnStageSettle(session, [req.Result.StageId, responseStageId]);
             session.SendResponse(fightSettleResponse, packet.Id);
         }

@@ -277,8 +277,10 @@ namespace AscNet.GameServer.Handlers
                 session.SendResponse(new BossSingleSaveScoreResponse { Code = 1 }, packet.Id);
                 return;
             }
-
             ReconcileLive(session);
+
+            bool isFirstClear = !session.stage.Stages.TryGetValue((uint)pending.StageId, out StageDatum? previousStageData)
+                || !previousStageData.Passed;
             if (!TryCommitScore(session, pending, false, out StageDatum? stageData))
             {
                 session.SendResponse(new BossSingleSaveScoreResponse { Code = 1 }, packet.Id);
@@ -286,8 +288,8 @@ namespace AscNet.GameServer.Handlers
             }
 
             session.PendingBossSingleScore = null;
-            TaskModule.RecordStageClear(session, pending.StageId, 1);
             SendRankPush(session);
+            TaskModule.RecordStageClear(session, pending.StageId, 1, 0, isFirstClear);
             if (stageData is not null)
                 session.SendPush(new NotifyStageData { StageList = [stageData] });
             session.SendPush(BuildLoginData(session.player));
@@ -338,6 +340,8 @@ namespace AscNet.GameServer.Handlers
                     StageStatus = stageStatus
                 }
             };
+            bool isFirstClear = !session.stage.Stages.TryGetValue((uint)request.StageId, out StageDatum? previousStageData)
+                || !previousStageData.Passed;
             if (!TryCommitScore(session, pending, true, out StageDatum? stageData))
             {
                 session.SendResponse(new BossSingleAutoFightResponse { Code = 1 }, packet.Id);
@@ -345,7 +349,7 @@ namespace AscNet.GameServer.Handlers
             }
 
             state.BossAutoFightCount++;
-            TaskModule.RecordStageClear(session, request.StageId, 1);
+            TaskModule.RecordStageClear(session, request.StageId, 1, 0, isFirstClear);
             SendRankPush(session);
             session.SendPush(BuildLoginData(session.player));
             if (stageData is not null)

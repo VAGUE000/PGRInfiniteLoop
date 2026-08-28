@@ -801,9 +801,10 @@ internal partial class Program
         AssertEqual(true, failingGroupId > 0,
             "Effulgence has an over-ceiling skill with a natural in-ceiling upgrade (previously-failing group)");
 
-        // A fresh authoritative Effulgence character obtains every table-defined base skill at level 1.
+        // A fresh authoritative character obtains only groups whose initial table condition is met.
         AscNet.Common.Database.Character freshRoster = CreateTestCharacterRoster(characterId, level: 80);
         CharacterData freshCharacter = RequiredCharacterData(freshRoster, characterId);
+        int expectedInitialSkillCount = 0;
         foreach (int groupId in characterSkill.SkillGroupId.Where(id => id > 0).Distinct())
         {
             uint skillId = TableReaderV2.Parse<CharacterSkillGroupTable>()
@@ -811,11 +812,17 @@ internal partial class Program
                 .SkillId.Select(Convert.ToUInt32).FirstOrDefault();
             if (skillId <= 0)
                 continue;
-            CharacterSkill granted = freshCharacter.SkillList.Single(skill => skill.Id == skillId);
-            AssertEqual(1, granted.Level, $"Effulgence fresh-obtain {groupId} default skill level 1");
+            CharacterSkillUpgradeTable? initialUpgrade = TableReaderV2.Parse<CharacterSkillUpgradeTable>()
+                .FirstOrDefault(upgrade => upgrade.SkillId == (int)skillId && upgrade.Level == 0);
+            bool unlocked = initialUpgrade is null
+                || AscNet.Common.Database.Character.MeetsCharacterSkillCondition(freshCharacter, initialUpgrade.ConditionId);
+            AssertEqual(unlocked, freshCharacter.SkillList.Any(skill => skill.Id == skillId),
+                $"Effulgence fresh-obtain {groupId} initial condition");
+            if (unlocked)
+                expectedInitialSkillCount++;
         }
-        AssertEqual(characterSkill.SkillGroupId.Where(id => id > 0).Distinct().Count(),
-            freshCharacter.SkillList.Count, "Effulgence fresh-obtain grants every table-defined skill group");
+        AssertEqual(expectedInitialSkillCount, freshCharacter.SkillList.Count,
+            "Effulgence fresh-obtain grants condition-eligible skill groups");
 
         // Level the affected skill within its constructible ceiling with table-derived costs.
         CharacterSkillUpgradeTable validTransition = TableReaderV2.Parse<CharacterSkillUpgradeTable>()
@@ -827,6 +834,8 @@ internal partial class Program
         upgradeRoster.Uid = playerId;
         CharacterData upgradeCharacter = RequiredCharacterData(upgradeRoster, characterId);
         upgradeCharacter.Quality = 4; // meets the short-skill quality gate (Condition 13105)
+        if (upgradeCharacter.SkillList.All(skill => skill.Id != failingSkillId))
+            upgradeCharacter.SkillList.Add(new CharacterSkill { Id = failingSkillId, Level = 1 });
         CharacterSkill upgradeSkill = RequiredCharacterSkill(upgradeCharacter, failingSkillId,
             "Effulgence valid upgrade setup skill");
         upgradeSkill.Level = failingConstructibleMax - 1;
@@ -866,6 +875,8 @@ internal partial class Program
         invalidRoster.Uid = playerId + 1;
         CharacterData invalidCharacter = RequiredCharacterData(invalidRoster, characterId);
         invalidCharacter.Quality = 4; // passes the quality gate so the rejection is the max-level cap
+        if (invalidCharacter.SkillList.All(skill => skill.Id != failingSkillId))
+            invalidCharacter.SkillList.Add(new CharacterSkill { Id = failingSkillId, Level = 1 });
         CharacterSkill invalidSkill = RequiredCharacterSkill(invalidCharacter, failingSkillId,
             "Effulgence over-level upgrade setup skill");
         invalidSkill.Level = failingConstructibleMax;

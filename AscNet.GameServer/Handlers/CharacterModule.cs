@@ -707,24 +707,40 @@ namespace AscNet.GameServer.Handlers
         {
             CharacterUnlockSkillGroupRequest request = packet.Deserialize<CharacterUnlockSkillGroupRequest>();
 
-            NotifyCharacterDataList notifyCharacterData = new();
-            uint[] skillIds = Character.ResolveCharacterSkillIdsForGroupId(request.SkillGroupId).ToArray();
-            HashSet<int> affectedChars = TableReaderV2.Parse<CharacterSkillTable>()
+            uint[] skillIds = Character.ResolveCharacterSkillIdsForGroupId(request.SkillGroupId)
+                .Where(skillId => skillId > 0)
+                .Distinct()
+                .ToArray();
+            int ownerCharacterId = TableReaderV2.Parse<CharacterSkillTable>()
                 .Where(skill => skill.SkillGroupId.Contains(request.SkillGroupId))
                 .Select(skill => skill.CharacterId)
-                .ToHashSet();
-            foreach (CharacterData character in session.character.Characters.Where(character => affectedChars.Contains((int)character.Id)))
+                .FirstOrDefault();
+            uint defaultSkillId = skillIds.FirstOrDefault();
+            CharacterData? character = ownerCharacterId > 0
+                ? session.character.Characters.Find(candidate => candidate.Id == (uint)ownerCharacterId)
+                : null;
+            CharacterSkillUpgradeTable? initialUpgrade = defaultSkillId > 0
+                ? TableReaderV2.Parse<CharacterSkillUpgradeTable>()
+                    .FirstOrDefault(upgrade => upgrade.SkillId == (int)defaultSkillId && upgrade.Level == 0)
+                : null;
+            if (character is null || defaultSkillId <= 0
+                || initialUpgrade is not null
+                    && !Character.MeetsCharacterSkillCondition(character, initialUpgrade.ConditionId))
             {
-                foreach (uint skillId in skillIds.Where(skillId => character.SkillList.All(skill => skill.Id != skillId)))
-                {
-                    character.SkillList.Add(new CharacterSkill() { Id = skillId, Level = 1 });
-                }
-                notifyCharacterData.CharacterDataList.Add(character);
+                session.SendResponse(new CharacterUnlockSkillGroupResponse { Code = 20009021 }, packet.Id);
+                return;
             }
+            if (character.SkillList.Any(skill => skill.Id == defaultSkillId))
+            {
+                session.SendResponse(new CharacterUnlockSkillGroupResponse { Code = 20009047 }, packet.Id);
+                return;
+            }
+
+            character.SkillList.Add(new CharacterSkill { Id = defaultSkillId, Level = 1 });
+            NotifyCharacterDataList notifyCharacterData = new();
+            notifyCharacterData.CharacterDataList.Add(character);
             session.SendPush(notifyCharacterData);
-
             SaveCharacterProgress(session);
-
             session.SendResponse(new CharacterUnlockSkillGroupResponse(), packet.Id);
         }
 

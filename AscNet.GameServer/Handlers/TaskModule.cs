@@ -14,6 +14,7 @@ using SyncTask = AscNet.Common.MsgPack.NotifyTask.NotifyTaskTasks.NotifyTaskTask
 using SyncTaskSchedule = AscNet.Common.MsgPack.NotifyTask.NotifyTaskTasks.NotifyTaskTasksTask.NotifyTaskTasksTaskSchedule;
 using LifeTreeTask = AscNet.Table.V2.share.task.TaskTable;
 using LifeTreeTaskCondition = AscNet.Table.V2.share.task.ConditionTable;
+using AscNet.Table.V2.share.guild.boss;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -113,6 +114,8 @@ namespace AscNet.GameServer.Handlers
             CurrentTasksByPriority.Value.Select(task => task.Id).ToHashSet());
         private static readonly Lazy<IReadOnlyDictionary<uint, EquipTable>> EquipRowsById = new(() =>
             TableReaderV2.Parse<EquipTable>().ToDictionary(equip => (uint)equip.Id));
+        private static readonly Lazy<IReadOnlyDictionary<int, int>> GuildBossStageTypes = new(() =>
+            TableReaderV2.Parse<GuildBossStageCatalogTable>().ToDictionary(stage => stage.StageId, stage => stage.StageType));
 
         [RequestPacketHandler("DoClientTaskEventRequest")]
         public static void DoClientTaskEventRequestHandler(Session session, Packet.Request packet)
@@ -938,7 +941,10 @@ namespace AscNet.GameServer.Handlers
             ResetMissionType(session, 10);
         }
 
-        public static void RecordStageClear(Session session, int stageId, int count = 1, int actionPointCost = 0)
+        public static void RecordStageClear(Session session, int stageId, int count = 1, int actionPointCost = 0) =>
+            RecordStageClear(session, stageId, count, actionPointCost, true);
+
+        public static void RecordStageClear(Session session, int stageId, int count, int actionPointCost, bool isFirstClear)
         {
             EnsureMissionResets(session);
             foreach (CurrentConditionTable condition in TableReaderV2.Parse<CurrentConditionTable>())
@@ -950,16 +956,13 @@ namespace AscNet.GameServer.Handlers
                     15201 or 15217 or 15227 => true,
                     15202 => condition.Params.Count <= 1
                         || condition.Params[1] == 1 && stageId is >= 10_000_000 and < 20_000_000,
-                    25005 => stageId is >= 30_300_000 and < 30_310_000,
                     _ => false
                 };
-                if (!matches)
+                if (matches)
                 {
-                    continue;
+                    int increment = condition.Type == 15201 && condition.Params.Count > 1 ? 1 : count;
+                    AddConditionProgress(session, condition.Id, increment);
                 }
-
-                int increment = condition.Type == 15201 && condition.Params.Count > 1 ? 1 : count;
-                AddConditionProgress(session, condition.Id, increment);
             }
             HashSet<int> passportTaskIds = BuildPassportTaskProgress(session)
                 .Select(task => task.TaskId)
@@ -978,22 +981,55 @@ namespace AscNet.GameServer.Handlers
                     15201 or 15217 or 15227 => true,
                     15202 => condition.Params.Count <= 1
                         || condition.Params[1] == 1 && stageId is >= 10_000_000 and < 20_000_000,
-                    25005 => stageId is >= 30_300_000 and < 30_310_000,
                     _ => false
                 };
                 if (matches)
                     AddConditionProgress(session, condition.Id,
                         condition.Type == 15201 && condition.Params.Count > 1 ? 1 : count);
             }
-
+            if (isFirstClear)
+                RecordFirstClearProgress(session, stageId);
             if (actionPointCost > 0)
-            {
                 AddConditionTypeProgress(session, 11202, actionPointCost);
-            }
             session.player.Save();
             SendTaskSync(session);
         }
-        public static void RecordArenaResult(Session session, int point)
+
+        private static void RecordFirstClearProgress(Session session, int stageId)
+        {
+            bool isGuildBossStage = GuildBossStageTypes.Value.TryGetValue(stageId, out int guildBossStageType);
+            HashSet<int> conditionIds = [];
+            foreach (CurrentConditionTable condition in TableReaderV2.Parse<CurrentConditionTable>()
+                .Where(condition => condition.Type is 15216 or 25005))
+            {
+                bool matches = condition.Type == 25005
+                    ? BossModule.IsStage((uint)stageId)
+                    : isGuildBossStage && condition.Params.Count > 0 && guildBossStageType == condition.Params[0];
+                if (matches) conditionIds.Add(condition.Id);
+            }
+            HashSet<int> passportTaskIds = BuildPassportTaskProgress(session)
+                .Select(task => task.TaskId)
+                .ToHashSet();
+            HashSet<int> passportConditionIds = TableReaderV2.Parse<TaskTable>()
+                .Where(task => passportTaskIds.Contains(task.Id))
+                .Select(task => task.Condition)
+                .ToHashSet();
+            foreach (ConditionTable condition in TableReaderV2.Parse<ConditionTable>()
+                .Where(condition => passportConditionIds.Contains(condition.Id)
+                    && condition.Type is 15216 or 25005))
+            {
+                bool matches = condition.Type == 25005
+                    ? BossModule.IsStage((uint)stageId)
+                    : isGuildBossStage && condition.Params.Count > 0 && guildBossStageType == condition.Params[0];
+                if (matches) conditionIds.Add(condition.Id);
+            }
+            foreach (int conditionId in conditionIds)
+                AddConditionProgress(session, conditionId, 1);
+        }
+        public static void RecordArenaResult(Session session, int point) =>
+            RecordArenaResult(session, point, false);
+
+        public static void RecordArenaResult(Session session, int point, bool isFirstClear)
         {
             EnsureMissionResets(session);
             HashSet<int> currentArenaTaskIds = ArenaModule.CurrentTaskIds(session.player).ToHashSet();
@@ -1008,6 +1044,18 @@ namespace AscNet.GameServer.Handlers
                     condition.Type is 28005 or 28006
                     || (condition.Type is 28001 or 28003 && currentArenaConditionIds.Contains(condition.Id)))
                 .ToList();
+            if (isFirstClear)
+            {
+                HashSet<int> passportTaskIds = BuildPassportTaskProgress(session).Select(task => task.TaskId).ToHashSet();
+                foreach (int conditionId in TableReaderV2.Parse<TaskTable>()
+                    .Where(task => passportTaskIds.Contains(task.Id))
+                    .Join(TableReaderV2.Parse<ConditionTable>(),
+                        task => task.Condition, condition => condition.Id,
+                        (_, condition) => condition)
+                    .Where(condition => condition.Type == 28005)
+                    .Select(condition => condition.Id))
+                    AddConditionProgress(session, conditionId, 1);
+            }
             foreach (CurrentConditionTable condition in conditions)
             {
                 if (countTypes.Contains(condition.Type))
@@ -1020,10 +1068,8 @@ namespace AscNet.GameServer.Handlers
                     session.player.MissionProgress.ConditionCounters[condition.Id] = Math.Max(current, point);
                 }
             }
-            if (conditions.Count == 0)
-            {
+            if (conditions.Count == 0 && !isFirstClear)
                 return;
-            }
 
             HashSet<int> affectedConditionIds = conditions.Select(condition => condition.Id).ToHashSet();
             int[] affectedTaskIds = currentTasks
@@ -1032,6 +1078,8 @@ namespace AscNet.GameServer.Handlers
                 .ToArray();
             session.player.Save();
             SendCurrentTaskBatch(session, affectedTaskIds);
+            if (isFirstClear)
+                SendPassportConditionTypeSync(session, 28005);
         }
 
 

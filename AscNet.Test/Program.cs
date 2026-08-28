@@ -23375,7 +23375,7 @@ namespace AscNet.Test
                 taskModule,
                 "RecordStageClear",
                 BindingFlags.Static | BindingFlags.Public,
-                [typeof(Session), typeof(int), typeof(int), typeof(int)]);
+                [typeof(Session), typeof(int), typeof(int), typeof(int), typeof(bool)]);
 
             MethodInfo courseRewardHandler = GetRegisteredRequestHandlerMethod("GetCourseRewardRequest");
             AssertEqual("GetCourseRewardRequestHandler", courseRewardHandler.Name, "GetCourseRewardRequest registered handler method");
