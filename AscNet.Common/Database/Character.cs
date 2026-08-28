@@ -740,6 +740,36 @@ namespace AscNet.Common.Database
 
             return normalizedSkills;
         }
+        public bool UnlockQualityGatedSkills(CharacterData character)
+        {
+            CharacterSkillTable? skillTable = TableReaderV2.Parse<CharacterSkillTable>()
+                .Find(row => row.CharacterId == character.Id);
+            if (skillTable is null)
+                return false;
+
+            Dictionary<int, IReadOnlyList<uint>> skillsByGroup = BuildCharacterSkillIdsByGroupId(
+                TableReaderV2.Parse<CharacterSkillGroupTable>());
+            bool changed = false;
+            foreach (int groupId in skillTable.SkillGroupId.Distinct())
+            {
+                if (!skillsByGroup.TryGetValue(groupId, out IReadOnlyList<uint>? skillIds)
+                    || character.SkillList.Any(skill => skillIds.Contains(skill.Id)))
+                    continue;
+
+                uint skillId = skillIds.FirstOrDefault();
+                CharacterSkillUpgradeTable? initial = TableReaderV2.Parse<CharacterSkillUpgradeTable>()
+                    .FirstOrDefault(row => row.SkillId == (int)skillId && row.Level == 0);
+                if (skillId == 0 || initial?.ConditionId.Count is not > 0
+                    || !MeetsCharacterSkillCondition(character, initial.ConditionId))
+                    continue;
+
+                character.SkillList.Add(new CharacterSkill { Id = skillId, Level = 1 });
+                changed = true;
+            }
+
+            return changed;
+        }
+
 
         public bool TrySwitchCharacterSkill(int skillId, out bool changed)
         {

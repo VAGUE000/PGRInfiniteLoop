@@ -7,6 +7,7 @@ using AscNet.Table.V2.share.config;
 using AscNet.Table.V2.share.equip;
 using AscNet.Table.V2.share.partner;
 using AscNet.Table.V2.share.team;
+using AscNet.Table.V2.share.character;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.fuben;
 using AscNet.Table.V2.share.fashion;
@@ -696,7 +697,15 @@ namespace AscNet.GameServer.Handlers
                     Character = characterData,
                     Equips = equips,
                     WeaponFashionId = weaponFashionId,
-                    Partner = partner
+                    Partner = partner,
+                    IsRobot = false,
+                    RobotId = 0,
+                    IsNpc = false,
+                    CharacterCareer = ResolveCharacterCareer((int)characterData.Id),
+                    MagicIds = BuildObservationMagicIds(
+                        cardIdsToDeploy.Select(id => new CharacterData { Id = id })
+                            .Concat(robotRowsToDeploy.Values.Select(row => new CharacterData { Id = (uint)row.CharacterId })),
+                        characterData)
                 });
             }
 
@@ -762,10 +771,7 @@ namespace AscNet.GameServer.Handlers
                         TrustExp = 0,
                         Ability = robot.ShowAbility ?? 0,
                         LiberateLv = robot.LiberateLv ?? 0,
-                        CharacterHeadInfo = new()
-                        {
-                            HeadFashionId = fashionId
-                        }
+                        CharacterHeadInfo = new() { HeadFashionId = fashionId }
                     };
                     deployedCharacters.Add(robotCharacterData);
                     playerNpcData.Add(npcKey, new
@@ -777,6 +783,11 @@ namespace AscNet.GameServer.Handlers
                         IsRobot = true,
                         RobotId = robotId,
                         IsNpc = false,
+                        CharacterCareer = ResolveCharacterCareer(robot.CharacterId),
+                        MagicIds = BuildObservationMagicIds(
+                            cardIdsToDeploy.Select(id => new CharacterData { Id = id })
+                                .Concat(robotRowsToDeploy.Values.Select(row => new CharacterData { Id = (uint)row.CharacterId })),
+                            robotCharacterData)
                     });
                     npcKey++;
                 }
@@ -814,6 +825,7 @@ namespace AscNet.GameServer.Handlers
 
             if (!TransfiniteModule.TryCommitPreFight(session, req.PreFightData.StageId, out int transfiniteCommitCode))
             {
+
                 rsp.Code = transfiniteCommitCode;
                 session.SendResponse(rsp, packet.Id);
                 return;
@@ -821,6 +833,89 @@ namespace AscNet.GameServer.Handlers
 
             session.fight = new(req, rsp.FightData.FightId);
             session.SendResponse(rsp, packet.Id);
+        }
+        private static int ResolveCharacterCareer(int characterId) =>
+            TableReaderV2.Parse<CharacterTable>()
+                .FirstOrDefault(row => row.Id == characterId)?.Career ?? 0;
+
+        private static string ResolveCharacterCareerName(int characterId)
+        {
+            CharacterTable? character = TableReaderV2.Parse<CharacterTable>()
+                .FirstOrDefault(row => row.Id == characterId);
+            return TableReaderV2.Parse<CharacterCareerTable>()
+                .FirstOrDefault(row => row.Type == character?.Career)?.Name ?? string.Empty;
+        }
+
+        private static int ResolveCareerType(string name) =>
+            TableReaderV2.Parse<CharacterCareerTable>()
+                .FirstOrDefault(row => row.Name == name)?.Type ?? 0;
+
+        private static Dictionary<int, int> BuildObservationMagicIds(
+            IEnumerable<CharacterData> team,
+            CharacterData observer)
+        {
+            if (ResolveCharacterCareerName((int)observer.Id) != "Observer")
+                return [];
+
+            List<(string Career, int Element)> members = team
+                .Where(member => member.Id > 0)
+                .Select(member => ((int)member.Id, ResolveCharacterCareerName((int)member.Id)))
+                .Select(member => (member.Item2,
+                    TableReaderV2.Parse<CharacterTable>()
+                        .FirstOrDefault(row => row.Id == member.Item1)?.Element ?? 0))
+                .ToList();
+            if (members.Count(member => member.Career == "Observer") != 1
+                || members.Count(member => member.Element == 1) > 1)
+                return [];
+
+            int supportCareerCount = members.Count(member => member.Career is "Support" or "Amplifier");
+            int tankCareerCount = members.Count(member => member.Career is "Tank" or "Breaker");
+            if (supportCareerCount + tankCareerCount >= 2)
+                return [];
+
+            int activeCareer = 0;
+            int activeElement = 0;
+            if (supportCareerCount == 1)
+            {
+                activeElement = members.First(member => member.Career is "Support" or "Amplifier").Element;
+                activeCareer = ResolveCareerType(
+                    members.Any(member => member.Career == "Breaker" && member.Element == activeElement)
+                        ? "Breaker"
+                        : "Tank");
+            }
+            else if (tankCareerCount == 1)
+            {
+                activeElement = members.First(member => member.Career is "Tank" or "Breaker").Element;
+                activeCareer = ResolveCareerType("Amplifier");
+            }
+            if (activeCareer == 0)
+                return [];
+
+            CharacterSkill? observationSkill = observer.SkillList
+                .FirstOrDefault(skill => TableReaderV2.Parse<CharacterObsTriggerMagicTable>()
+                    .Any(row => row.SkillId == (int)skill.Id));
+            if (observationSkill is null)
+                return [];
+
+            CharacterObsTriggerMagicTable? config = TableReaderV2.Parse<CharacterObsTriggerMagicTable>()
+                .FirstOrDefault(row => row.SkillId == (int)observationSkill.Id);
+            if (config is null)
+                return [];
+
+            int index = Enumerable.Range(0, config.Level.Count)
+                .Where(i => config.ObservationCareer.ElementAtOrDefault(i) == activeCareer
+                    && config.ObservationElement.ElementAtOrDefault(i) == activeElement
+                    && config.Level[i] <= observationSkill.Level)
+                .OrderByDescending(i => config.Level[i])
+                .FirstOrDefault(-1);
+            if (index < 0)
+                return [];
+
+            return config.MagicList.ElementAtOrDefault(index)?
+                .Split('|', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => int.TryParse(id, out int value) ? value : 0)
+                .Where(id => id > 0)
+                .ToDictionary(id => id, _ => observationSkill.Level) ?? [];
         }
 
         private static CharacterData ApplyRandomFashion(

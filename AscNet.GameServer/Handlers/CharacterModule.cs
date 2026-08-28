@@ -679,6 +679,7 @@ namespace AscNet.GameServer.Handlers
 
                     character.Star = 0;
                     character.Quality++;
+                    session.character.UnlockQualityGatedSkills(character);
                 }
                 else
                 {

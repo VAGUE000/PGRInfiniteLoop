@@ -34,8 +34,84 @@ internal partial class Program
 
         ValidateVersion47FashionUseCompatibility();
         ValidateVersion47CharacterHeadSelectionCompatibility();
-        ValidateVersion47EffulgenceSkillProgressionCompatibility();
         ValidateVersion47GeneralSkillPreFightCompatibility();
+        ValidateVersion47ObserverPreFightCompatibility();
+    }
+
+    private static void ValidateVersion47ObserverPreFightCompatibility()
+    {
+        CharacterCareerTable observerCareer = TableReaderV2.Parse<CharacterCareerTable>()
+            .First(row => row.Name == "Observer");
+        CharacterTable observerRow = TableReaderV2.Parse<CharacterTable>()
+            .First(row => row.Career == observerCareer.Type);
+        CharacterObsTriggerMagicTable observationRow = TableReaderV2.Parse<CharacterObsTriggerMagicTable>().First();
+        int maxLevel = TableReaderV2.Parse<CharacterSkillLevelEffectTable>()
+            .Where(row => row.SkillId == observationRow.SkillId)
+            .Max(row => row.Level);
+        MethodInfo buildMagicIds = RequiredMethod(
+            RequiredAscNetGameServerType("AscNet.GameServer.Handlers.FightModule"),
+            "BuildObservationMagicIds", BindingFlags.Static | BindingFlags.NonPublic,
+            [typeof(IEnumerable<CharacterData>), typeof(CharacterData)]);
+
+        CharacterData locked = new() { Id = (uint)observerRow.Id, SkillList = [] };
+        Dictionary<int, int> lockedMagic = (Dictionary<int, int>)buildMagicIds.Invoke(
+            null, [new[] { locked }, locked])!;
+        AssertEqual(0, lockedMagic.Count, "locked Observer skill omits observation activation");
+
+        CharacterData unlocked = new()
+        {
+            Id = (uint)observerRow.Id,
+            SkillList = [new CharacterSkill { Id = (uint)observationRow.SkillId, Level = maxLevel }]
+        };
+        Dictionary<string, int> careerTypes = TableReaderV2.Parse<CharacterCareerTable>()
+            .ToDictionary(row => row.Name, row => row.Type);
+        Dictionary<int, string> careerNames = careerTypes.ToDictionary(pair => pair.Value, pair => pair.Key);
+        int tankType = careerTypes["Tank"];
+        int amplifierType = careerTypes["Amplifier"];
+        int[] supportElements = observationRow.ObservationCareer
+            .Select((career, index) => (career, element: observationRow.ObservationElement[index]))
+            .Where(value => value.career == tankType)
+            .Select(value => value.element)
+            .Distinct()
+            .ToArray();
+        int[] tankElements = observationRow.ObservationCareer
+            .Select((career, index) => (career, element: observationRow.ObservationElement[index]))
+            .Where(value => value.career == amplifierType)
+            .Select(value => value.element)
+            .Distinct()
+            .ToArray();
+        CharacterTable support = TableReaderV2.Parse<CharacterTable>().First(row =>
+            row.Id != observerRow.Id
+            && (careerNames[row.Career] is "Support" or "Amplifier")
+            && supportElements.Contains(row.Element));
+        CharacterTable tank = TableReaderV2.Parse<CharacterTable>().First(row =>
+            row.Id != observerRow.Id
+            && (careerNames[row.Career] is "Tank" or "Breaker")
+            && tankElements.Contains(row.Element));
+
+        Dictionary<int, int> supportMagic = (Dictionary<int, int>)buildMagicIds.Invoke(
+            null, [new[]
+            {
+                unlocked,
+                new CharacterData { Id = (uint)support.Id }
+            }, unlocked])!;
+        Dictionary<int, int> tankMagic = (Dictionary<int, int>)buildMagicIds.Invoke(
+            null, [new[]
+            {
+                unlocked,
+                new CharacterData { Id = (uint)tank.Id }
+            }, unlocked])!;
+        AssertEqual(true, supportMagic.Count > 0 && tankMagic.Count > 0,
+            "unlocked Observer emits table-selected observation MagicIds");
+        AssertEqual(true, !supportMagic.Keys.SequenceEqual(tankMagic.Keys),
+            "Observer team compositions select different MagicIds");
+        AssertEqual(true, supportMagic.Values.All(value => value == maxLevel), "Observer MagicIds preserve skill level");
+        AssertEqual(true, tankMagic.Values.All(value => value == maxLevel), "Observer tank-form MagicIds preserve skill level");
+        AssertEqual(observerRow.Career, (int)RequiredMethod(
+            RequiredAscNetGameServerType("AscNet.GameServer.Handlers.FightModule"),
+            "ResolveCharacterCareer", BindingFlags.Static | BindingFlags.NonPublic,
+            [typeof(int)]).Invoke(null, [observerRow.Id])!,
+            "ordinary career resolver is table-backed");
     }
 
     private static void ValidateVersion47GeneralSkillPreFightCompatibility()
@@ -98,7 +174,7 @@ internal partial class Program
         AssertEqual(2, role.NpcData.Count, "GeneralSkill robot PreFight constructs both deployments");
         System.Collections.IDictionary robotNpc = role.NpcData.Values
             .Select(value => RequiredDynamicMap((object?)value, "GeneralSkill robot NPC"))
-            .Single(npc => npc.Contains("RobotId"));
+            .Single(npc => RequiredDynamicInteger(npc, "RobotId", "GeneralSkill robot NPC") != 0);
         AssertEqual(robot.Id, RequiredDynamicInteger(robotNpc, "RobotId", "GeneralSkill robot NPC"),
             "GeneralSkill robot PreFight preserves RobotId");
 
