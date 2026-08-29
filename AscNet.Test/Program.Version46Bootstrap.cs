@@ -282,6 +282,15 @@ internal partial class Program
                 "4.6 Official Site submenu style");
         });
 
+        context.Request.RouteValues["version"] = "4.7.0";
+        AssertNoticeObject("HandleSecondMenuNoticeRequest", notice =>
+        {
+            JToken swapTeam = notice.Value<JArray>("Content")!
+                .Single(entry => entry.Value<string>("Title") == "Swap Team");
+            AssertEqual("90049", swapTeam.Value<string>("JumpAddr"), "4.7 Swap Team submenu jump");
+        });
+        context.Request.RouteValues["version"] = "4.6.0";
+
         MethodInfo popupHandler = RequiredMethod(
             controller,
             "HandlePopUpPicNoticeRequest",
