@@ -111,6 +111,11 @@ namespace AscNet.Test
                     ValidateTrialCompatibility();
                     return;
                 }
+                if (args.Contains("--golden-vortex-compat-only"))
+                {
+                    ValidateGoldenVortexCompatibility();
+                    return;
+                }
                 if (args.Contains("--stronghold-compat-only"))
                 {
                     ValidateStrongholdCompatibility();

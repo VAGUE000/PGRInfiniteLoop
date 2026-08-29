@@ -1440,9 +1440,50 @@ public sealed class NotifyBfrtProgressInfo
 
 
     [global::MessagePack.MessagePackObject(true)]
+    public class ExploreEnduranceInfo
+    {
+        public Int32 Id { get; set; }
+        public Int32 Use { get; set; }
+    }
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class ExploreChapterData
+    {
+        public Int32 Id { get; set; }
+        public List<ExploreEnduranceInfo> EnduranceInfos { get; set; } = new();
+        public Int32 RewardStatus { get; set; }
+        public List<Int32> FinishNodes { get; set; } = new();
+        public List<Int32> UnlockEvents { get; set; } = new();
+    }
+
+    [global::MessagePack.MessagePackObject(true)]
     public class NotifyExploreData
     {
-        public List<dynamic> ChapterDatas { get; set; } = new();
+        public List<ExploreChapterData> ChapterDatas { get; set; } = new();
+    }
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class NotifyExploreUnlockEvent
+    {
+        public Int32 Id { get; set; }
+        public List<Int32> UnlockEvents { get; set; } = new();
+    }
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class ExploreFinishNodeRequest { public Int32 Id { get; set; } }
+    [global::MessagePack.MessagePackObject(true)]
+    public class ExploreGetRewardRequest { public Int32 Id { get; set; } }
+    [global::MessagePack.MessagePackObject(true)]
+    public class ExploreFinishNodeResponse
+    {
+        public Int32 Code { get; set; }
+        public List<RewardGoods> RewardGoodsList { get; set; } = new();
+    }
+    [global::MessagePack.MessagePackObject(true)]
+    public class ExploreGetRewardResponse
+    {
+        public Int32 Code { get; set; }
+        public List<RewardGoods> RewardGoodsList { get; set; } = new();
     }
 
 

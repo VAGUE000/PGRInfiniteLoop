@@ -1374,7 +1374,7 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(DormModule.BuildLoginData(session));
             session.SendPush(BuildTrpgLoginData());
             session.SendPush(BuildMedalLoginData(session.player));
-            session.SendPush(new NotifyExploreData());
+            session.SendPush(ExploreModule.BuildLoginData(session.player));
             session.SendPush(notifyGatherRewardList);
             session.SendPush(new NotifyGuildEvent());
             SendEmptyStartupPush(session, "NotifyNewActivityCalendarData");

@@ -443,6 +443,12 @@ namespace AscNet.GameServer.Handlers
         public static void PreFightRequestHandler(Session session, Packet.Request packet)
         {
             PreFightRequest req = MessagePackSerializer.Deserialize<PreFightRequest>(packet.Content);
+            int explorePreFightCode = ExploreModule.ValidatePreFight(session, req.PreFightData);
+            if (explorePreFightCode != 0)
+            {
+                session.SendResponse(new PreFightResponse { Code = explorePreFightCode }, packet.Id);
+                return;
+            }
             if (StrongholdModule.TryAuthorizePreFight(session.player, req.PreFightData.StageId, out int strongholdCode))
             {
                 if (strongholdCode != 0)
@@ -2409,6 +2415,7 @@ namespace AscNet.GameServer.Handlers
                 (int)session.player.PlayerData.Level);
             int challengeCount = session.fight?.PreFight.PreFightData.ChallengeCount ?? 1;
             uint responseStageId = ResolveFightSettleStageId(session, req);
+            ExploreModule.TrySettle(session, req.Result);
             StageDatum? previousStageData = session.stage?.Stages.TryGetValue(responseStageId, out StageDatum? existingStageData) == true ? existingStageData : null;
             bool isQuickClear = responseStageId != req.Result.StageId;
             bool isFirstClear = ArenaModule.IsArenaStage(req.Result.StageId)
@@ -2536,6 +2543,9 @@ namespace AscNet.GameServer.Handlers
                     AddRewardId(levelControl?.FinishDropId);
                 }
             }
+            if (ExploreModule.TryGetStageRewardId(req.Result.StageId, out int exploreRewardId))
+                AddRewardId(exploreRewardId);
+
 
             List<List<RewardGoods>> multiRewards = new();
             List<RewardApplicationResult>? deferredRewardApplications = null;
