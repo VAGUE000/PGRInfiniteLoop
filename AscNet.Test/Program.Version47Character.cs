@@ -91,6 +91,40 @@ internal partial class Program
         bool changed = maxRoster.NormalizeCharactersForCurrentTables();
         AssertEqual(false, changed, "quality-gated normalization is idempotent");
         AssertEqual(2, maxSkill.Level, "quality-gated max level remains stable");
+        var liberationCandidate = (from character in TableReaderV2.Parse<CharacterSkillTable>()
+                                   from groupId in character.SkillGroupId.Where(id => id > 0)
+                                   let groupRow = TableReaderV2.Parse<CharacterSkillGroupTable>()
+                                       .FirstOrDefault(row => row.Id == groupId)
+                                   from liberationSkillId in groupRow?.SkillId.Take(1) ?? []
+                                   let initial = TableReaderV2.Parse<CharacterSkillUpgradeTable>()
+                                       .FirstOrDefault(row => row.SkillId == liberationSkillId && row.Level == 0)
+                                   from conditionId in initial?.ConditionId ?? []
+                                   let condition = TableReaderV2.Parse<ConditionTable>()
+                                       .FirstOrDefault(row => row.Id == conditionId)
+                                   where condition?.Type == 11102
+                                       && condition.Params.Count >= 2
+                                       && condition.Params[0] == character.CharacterId
+                                   select (character.CharacterId, SkillId: (uint)liberationSkillId,
+                                       RequiredLiberation: condition.Params[1])).First();
+        AscNet.Common.Database.Character staleLiberationRoster =
+            CreateTestCharacterRoster(liberationCandidate.CharacterId, 80);
+        CharacterData staleLiberation =
+            RequiredCharacterData(staleLiberationRoster, liberationCandidate.CharacterId);
+        staleLiberation.LiberateLv = liberationCandidate.RequiredLiberation - 1;
+        staleLiberation.SkillList.RemoveAll(skill => skill.Id == liberationCandidate.SkillId);
+        staleLiberation.SkillList.Add(new CharacterSkill { Id = liberationCandidate.SkillId, Level = 1 });
+        staleLiberationRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(false, staleLiberation.SkillList.Any(skill => skill.Id == liberationCandidate.SkillId),
+            "locked Ultima Awaken skill is removed from stale accounts");
+
+        AscNet.Common.Database.Character awakenedRoster =
+            CreateTestCharacterRoster(liberationCandidate.CharacterId, 80);
+        CharacterData awakened = RequiredCharacterData(awakenedRoster, liberationCandidate.CharacterId);
+        awakened.LiberateLv = liberationCandidate.RequiredLiberation;
+        awakened.SkillList.RemoveAll(skill => skill.Id == liberationCandidate.SkillId);
+        awakenedRoster.NormalizeCharactersForCurrentTables();
+        AssertEqual(1, awakened.SkillList.Single(skill => skill.Id == liberationCandidate.SkillId).Level,
+            "Ultima Awaken skill unlocks at its table-required liberation stage");
 
         var ordinaryCandidate = (from character in TableReaderV2.Parse<CharacterSkillTable>()
                                  from groupId in character.SkillGroupId.Where(id => id > 0)

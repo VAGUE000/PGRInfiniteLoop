@@ -711,6 +711,14 @@ namespace AscNet.Common.Database
             {
                 if (!skillIdsByGroupId.TryGetValue(skillGroupId, out IReadOnlyList<uint>? groupSkillIds))
                     continue;
+                uint defaultSkillId = groupSkillIds.FirstOrDefault();
+                CharacterSkillUpgradeTable? initial = defaultSkillId > 0
+                    && upgradesBySkillId.TryGetValue((int)defaultSkillId, out IReadOnlyList<CharacterSkillUpgradeTable>? defaultUpgrades)
+                        ? defaultUpgrades.FirstOrDefault(row => row.Level == 0)
+                        : null;
+                if (initial is not null && !MeetsCharacterSkillCondition(character, initial.ConditionId))
+                    continue;
+
                 CharacterSkill? selectedSkill = existingSkills?.LastOrDefault(skill => groupSkillIds.Contains(skill.Id));
                 if (selectedSkill is not null)
                 {
@@ -720,13 +728,8 @@ namespace AscNet.Common.Database
                     else
                         normalizedSkills.Add(selectedSkill);
                 }
-                else if (groupSkillIds.FirstOrDefault() is uint defaultSkillId && defaultSkillId > 0)
+                else if (defaultSkillId > 0)
                 {
-                    CharacterSkillUpgradeTable? initial = upgradesBySkillId.TryGetValue((int)defaultSkillId, out IReadOnlyList<CharacterSkillUpgradeTable>? defaultUpgrades)
-                        ? defaultUpgrades.FirstOrDefault(row => row.Level == 0)
-                        : null;
-                    if (initial is not null && !MeetsCharacterSkillCondition(character, initial.ConditionId))
-                        continue;
                     normalizedSkills.Add(new CharacterSkill { Id = defaultSkillId, Level = 1 });
                 }
             }
@@ -1218,7 +1221,17 @@ namespace AscNet.Common.Database
                     .FirstOrDefault(candidate => candidate.Id == conditionId);
                 if (condition is null || condition.Params.Count == 0)
                     return false;
-                if (condition.Type == 13103)
+                if (condition.Type == 11102)
+                {
+                    // The requested character's liberation stage >= Params[1].
+                    if (condition.Params.Count < 2
+                        || character.Id != (uint)condition.Params[0]
+                        || character.LiberateLv < condition.Params[1])
+                    {
+                        return false;
+                    }
+                }
+                else if (condition.Type == 13103)
                 {
                     // Character level >= Params[0].
                     if (character.Level < condition.Params[0])
