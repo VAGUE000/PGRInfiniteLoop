@@ -2387,12 +2387,12 @@ namespace AscNet.GameServer.Handlers
             }
             if (session.player.Stronghold.PendingStageId == (int)req.Result.StageId)
             {
-                StrongholdModule.Settle(session.player, req.Result.IsWin);
+                StrongholdFightResult strongholdResult = StrongholdModule.Settle(session.player, req.Result.IsWin, session);
                 FightSettleResponse.FightSettleResponseSettle settle = new()
                 {
                     IsWin = req.Result.IsWin,
                     StageId = req.Result.StageId,
-                    StrongholdFightResult = new StrongholdFightResult { AllFinished = req.Result.IsWin }
+                    StrongholdFightResult = strongholdResult
                 };
                 session.fight = null;
                 session.SendResponse(new FightSettleResponse { Code = 0, Settle = settle }, packet.Id);

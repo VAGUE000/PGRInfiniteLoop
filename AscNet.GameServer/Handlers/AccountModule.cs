@@ -1273,6 +1273,7 @@ namespace AscNet.GameServer.Handlers
             session.ClampPlayerLevelToConfiguredMaximum();
             Theatre6Module.ReconcileAvailability(session.player, DateTimeOffset.UtcNow);
             (ActivityResultNotify? arenaResult, NotifyArenaActivity arenaActivity) = ArenaModule.ReconcileLogin(session);
+            StrongholdModule.PrepareLogin(session.player);
 
 
             // Reconcile before NotifyLogin so repaired equipped head ids are present in the login
@@ -1336,7 +1337,6 @@ namespace AscNet.GameServer.Handlers
             PurchaseDailyNotify purchaseDailyNotify = BuildPurchaseDailyNotify();
             NotifyPurchaseRecommendConfig purchaseRecommendConfig = BuildPurchaseRecommendConfig();
             session.SendPush(notifyLogin);
-            session.SendPush(StrongholdModule.BuildLoginData(session.player));
             if (headTimeout is not null)
                 session.SendPush(headTimeout);
             session.SendPush(notifyPayInfo);
@@ -1462,7 +1462,8 @@ namespace AscNet.GameServer.Handlers
             SendEmptyStartupPush(session, "NotifySettingLoadingOption");
             session.SendPush(RepeatChallengeModule.BuildLoginData(session.player));
             SendEmptyStartupPush(session, "NotifyPlayerReportData");
-            SendEmptyStartupPush(session, "NotifyStrongholdLoginData");
+            SendEmptyStartupPush(session, "NotifySameColorGameData");
+            session.SendPush(StrongholdModule.BuildLoginData(session.player));
             SendEmptyStartupPush(session, "NotifySucceedBossData");
             SendEmptyStartupPush(session, "NotifyTaikoMasterData");
             SendEmptyStartupPush(session, "NotifyTheatreData");
