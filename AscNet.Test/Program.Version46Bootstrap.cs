@@ -244,11 +244,11 @@ internal partial class Program
         AssertEqual(live.LaunchIndexSha1, ConfigValue(served, "LaunchIndexSha1"), "4.6 served LaunchIndexSha1");
 
         ServerVersionConfig current = (ServerVersionConfig)getVersion.Invoke(null, ["4.7.0"])!;
-        AssertEqual("4.7.10", current.DocumentVersion, "4.7 live DocumentVersion");
-        AssertEqual("4.7.10", current.LaunchModuleVersion, "4.7 live LaunchModuleVersion");
+        AssertEqual("4.7.11", current.DocumentVersion, "4.7 live DocumentVersion");
+        AssertEqual("4.7.11", current.LaunchModuleVersion, "4.7 live LaunchModuleVersion");
         AssertEqual("c5d4baac85a6e37b8109ea43dc045d31", current.IndexMd5, "4.7 live IndexMd5");
-        AssertEqual("499c7730eb82ccfa6084c4f1d97d3046495dfb47", current.IndexSha1, "4.7 live IndexSha1");
-        AssertEqual("e2653fd80f26cb8823ec0757a979da1b4bc468e6", current.LaunchIndexSha1, "4.7 live LaunchIndexSha1");
+        AssertEqual("5f41e51783a5183a619d14d586638dbdb557a996", current.IndexSha1, "4.7 live IndexSha1");
+        AssertEqual("2ea1ce3cc9271c9e75df7a16b5465cfb8922abc7", current.LaunchIndexSha1, "4.7 live LaunchIndexSha1");
         ServerVersionConfig fallback = (ServerVersionConfig)getVersion.Invoke(null, ["99.0.0"])!;
         AssertEqual(current.IndexSha1, fallback.IndexSha1, "unknown future version uses latest live metadata");
         ServerVersionConfig previous = (ServerVersionConfig)getVersion.Invoke(null, ["4.5.0"])!;
