@@ -283,6 +283,28 @@ internal partial class Program
         _ = ReadPushPayload<NotifyTask>(harness, nameof(NotifyTask), "Dorm reset quest accept task push");
         AssertEqual(0, ReadResponsePayload<QuestAcceptResponse>(harness, 46_995_037, nameof(QuestAcceptResponse), "Dorm reset quest accept response").Code,
             "Dorm quest accepts from replacement board");
+        int dailyResetBefore = player.Dorm.Quest.ResetCount;
+        PlayerDormQuestAccept activeBeforeDailyReset = player.Dorm.Quest.QuestAccept
+            .Single(accept => accept.ResetCount == dailyResetBefore && !accept.IsAward);
+        player.Dorm.Quest.NextRefreshTime = 1;
+        InvokeRegisteredRequestHandler(nameof(HeartbeatRequest), harness.Session, 46_995_038, new HeartbeatRequest());
+        NotifyDormQuestData dailyRefresh = ReadPushPayload<NotifyDormQuestData>(
+            harness, nameof(NotifyDormQuestData), "Dorm quest daily refresh push");
+        _ = ReadResponsePayload<HeartbeatResponse>(
+            harness, 46_995_038, nameof(HeartbeatResponse), "Dorm quest daily refresh heartbeat");
+        AssertEqual(dailyResetBefore + 1, player.Dorm.Quest.ResetCount,
+            "Dorm quest daily refresh advances reset");
+        AssertEqual(true, player.Dorm.Quest.QuestAccept.Contains(activeBeforeDailyReset),
+            "Dorm quest daily refresh preserves active reward state");
+        AssertEqual(false, dailyRefresh.TotalQuest.Any(board => dailyRefresh.QuestAccept.Any(accept =>
+                accept.QuestId == board.QuestId && accept.Index == board.Index && accept.ResetCount == board.ResetCount)),
+            "Dorm quest replacement board has no stale accepted overlays");
+        AssertEqual(true, player.Dorm.Quest.NextRefreshTime > DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            "Dorm quest next daily refresh persists");
+        InvokeRegisteredRequestHandler(nameof(HeartbeatRequest), harness.Session, 46_995_039, new HeartbeatRequest());
+        _ = ReadResponsePayload<HeartbeatResponse>(
+            harness, 46_995_039, nameof(HeartbeatResponse), "Dorm quest idempotent heartbeat");
+        AssertNoAvailablePacket(harness, "Dorm quest daily refresh idempotence");
         InvokeRegisteredRequestHandler(nameof(QuestReadFileRequest), harness.Session, 46_995_032, new QuestReadFileRequest { FileId = -1 });
         AssertEqual(20060079, ReadResponsePayload<QuestReadFileResponse>(harness, 46_995_032, nameof(QuestReadFileResponse), "Dorm invalid quest file response").Code,
             "Dorm quest invalid file code");
@@ -712,17 +734,44 @@ internal partial class Program
         DormCharacterFinishAllEventResponse finish = ReadResponsePayload<DormCharacterFinishAllEventResponse>(harness,
             46_995_005, nameof(DormCharacterFinishAllEventResponse), "Dorm finish-all response");
         AssertEqual(20060040, finish.Code, "Dorm finish-all empty code");
-        DormCharacterEventTable eventTable = TableReaderV2.Parse<DormCharacterEventTable>().FirstOrDefault()
-            ?? throw new InvalidDataException("Dorm compatibility: no character event row.");
-        PlayerDormCharacter eventCharacter = player.Dorm.Characters.Single(row => row.CharacterId == secondCharacterId);
-        eventCharacter.EventList.Add(new PlayerDormEvent { EventId = eventTable.EventId, EndTime = 0 });
+        List<DormCharacterEventTable> eventRows = TableReaderV2.Parse<DormCharacterEventTable>()
+            .Where(row => player.Dorm.Characters.Any(character => character.CharacterId == row.CharacterId))
+            .GroupBy(row => row.FinishReward).Select(group => group.First()).ToList();
+        List<DormCharacterEventTable> operateEvents = eventRows.Take(2).ToList();
+        AssertEqual(2, operateEvents.Count, "Dorm character distinct event rewards");
+        foreach ((DormCharacterEventTable operateEvent, int index) in operateEvents.Select((row, index) => (row, index)))
+        {
+            PlayerDormCharacter operateCharacter = player.Dorm.Characters.Single(character => character.CharacterId == operateEvent.CharacterId);
+            PlayerDormEvent playerEvent = new() { EventId = operateEvent.EventId, EndTime = (uint)(46_995_008 + index) };
+            operateCharacter.EventList.Add(playerEvent);
+            InvokeRegisteredRequestHandler(nameof(DormCharacterOperateRequest), harness.Session, 46_995_008 + index,
+                new DormCharacterOperateRequest { CharacterId = operateCharacter.CharacterId, EventId = operateEvent.EventId, OperateType = 1 });
+            _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), $"Dorm character event {index} reward push");
+            DormCharacterOperateResponse response = ReadResponsePayload<DormCharacterOperateResponse>(harness, 46_995_008 + index,
+                nameof(DormCharacterOperateResponse), $"Dorm character event {index} response");
+            AssertEqual(0, response.Code, $"Dorm character event {index} reward code");
+            AssertEqual(true, response.RewardGoods.Count > 0, $"Dorm character event {index} reward goods");
+            AssertEqual(false, operateCharacter.EventList.Contains(playerEvent), $"Dorm character event {index} removed");
+            AssertNoAvailablePacket(harness, $"Dorm character event {index}");
+        }
+
+        foreach (PlayerDormCharacter character in player.Dorm.Characters)
+            character.EventList.Clear();
+        List<(PlayerDormCharacter Character, PlayerDormEvent Event)> finishEvents = operateEvents.Select((row, index) =>
+        {
+            PlayerDormCharacter character = player.Dorm.Characters.Single(entry => entry.CharacterId == row.CharacterId);
+            PlayerDormEvent playerEvent = new() { EventId = row.EventId, EndTime = (uint)(100 + index) };
+            character.EventList.Add(playerEvent);
+            return (character, playerEvent);
+        }).ToList();
         InvokeRegisteredRequestHandler(nameof(DormCharacterFinishAllEventRequest), harness.Session, 46_995_006,
             new DormCharacterFinishAllEventRequest());
+        _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), "Dorm finish-all reward push");
         DormCharacterFinishAllEventResponse completedFinish = ReadResponsePayload<DormCharacterFinishAllEventResponse>(harness,
             46_995_006, nameof(DormCharacterFinishAllEventResponse), "Dorm finish-all completion response");
         AssertEqual(0, completedFinish.Code, "Dorm finish-all completion code");
-        AssertEqual(0, completedFinish.MoodChange[secondCharacterId], "Dorm finish-all unchanged mood");
-        AssertEqual(0, eventCharacter.EventList.Count, "Dorm finish-all clears completed event");
+        AssertEqual(true, completedFinish.RewardGoods.Count > 0, "Dorm finish-all reward goods");
+        AssertEqual(true, finishEvents.All(entry => !entry.Character.EventList.Contains(entry.Event)), "Dorm finish-all removes rewarded events");
         AssertNoAvailablePacket(harness, "Dorm finish-all completion");
         InvokeRegisteredRequestHandler(nameof(DormCharacterFinishAllEventRequest), harness.Session, 46_995_007,
             new DormCharacterFinishAllEventRequest());

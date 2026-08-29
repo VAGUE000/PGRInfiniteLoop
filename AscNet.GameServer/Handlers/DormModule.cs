@@ -481,6 +481,20 @@ internal partial class DormModule
         session.SendResponse(new DormWorkRewardResponse { WorkRewards = rewards }, packet.Id);
     }
 
+    private static readonly Lazy<List<RewardGoodsTable>> DefaultDormEventReward = new(() =>
+    {
+        Dictionary<int, RewardGoodsTable> goods = TableReaderV2.Parse<RewardGoodsTable>().ToDictionary(row => row.Id);
+        return TableReaderV2.Parse<RewardTable>()
+            .Select(row => row.SubIds.Select(id => goods.GetValueOrDefault(id)).OfType<RewardGoodsTable>().ToList())
+            .FirstOrDefault(reward => reward.Count == 1 && reward[0].TemplateId == Inventory.DormCoin) ?? [];
+    });
+
+    private static List<RewardGoodsTable> DormEventReward(int rewardId)
+    {
+        List<RewardGoodsTable> reward = RewardHandler.GetRewardGoods(rewardId);
+        return reward.Count > 0 ? reward : DefaultDormEventReward.Value;
+    }
+
     [RequestPacketHandler("DormCharacterFinishAllEventRequest")]
     public static void DormCharacterFinishAllEventRequestHandler(Session session, Packet.Request packet)
     {
@@ -495,35 +509,42 @@ internal partial class DormModule
 
         Dictionary<int, DormCharacterEventTable> rows = TableReaderV2.Parse<DormCharacterEventTable>()
             .ToDictionary(row => row.EventId);
-        List<RewardGrant> grants = events
-            .Where(entry => rows.TryGetValue(entry.Event.EventId, out DormCharacterEventTable? row))
-            .Select(entry => new RewardGrant(
-                $"dorm-event:{session.player.PlayerData.Id}:{entry.Character.CharacterId}:{entry.Event.EventId}:{entry.Event.EndTime}",
-                RewardHandler.GetRewardGoods(rows[entry.Event.EventId].FinishReward)))
-            .Where(grant => grant.Goods.Count > 0)
+        List<((PlayerDormCharacter Character, PlayerDormEvent Event) Entry, RewardGrant Grant)> resolved = events
+            .Where(entry => rows.ContainsKey(entry.Event.EventId))
+            .Select(entry => (Entry: entry, Goods: DormEventReward(rows[entry.Event.EventId].FinishReward)))
+            .Where(entry => entry.Goods.Count > 0)
+            .Select(entry => (entry.Entry, new RewardGrant(
+                $"dorm-event:{session.player.PlayerData.Id}:{entry.Entry.Character.CharacterId}:{entry.Entry.Event.EventId}:{entry.Entry.Event.EndTime}",
+                entry.Goods)))
             .ToList();
-        RewardApplicationResult? rewards;
+        if (resolved.Count == 0)
+        {
+            session.SendResponse(new DormCharacterFinishAllEventResponse { Code = EventRewardTemplateMissing }, packet.Id);
+            return;
+        }
+
+        RewardApplicationResult rewards;
         try
         {
-            rewards = grants.Count == 0 ? null : RewardHandler.ApplyRewardsOnceAndPersist(grants, session);
-            foreach ((PlayerDormCharacter character, _) in events)
-                character.EventList.Clear();
+            rewards = RewardHandler.ApplyRewardsOnceAndPersist(resolved.Select(entry => entry.Grant).ToList(), session);
+            foreach (((PlayerDormCharacter character, PlayerDormEvent evt), _) in resolved)
+                character.EventList.Remove(evt);
             session.player.SaveChecked();
         }
         catch
         {
-            foreach ((PlayerDormCharacter character, PlayerDormEvent evt) in events)
+            foreach (((PlayerDormCharacter character, PlayerDormEvent evt), _) in resolved)
                 if (!character.EventList.Contains(evt))
                     character.EventList.Add(evt);
             session.SendResponse(new DormCharacterFinishAllEventResponse { Code = DormRequestDataInvalid }, packet.Id);
             return;
         }
 
-        rewards?.SendPushes(session);
+        rewards.SendPushes(session);
         session.SendResponse(new DormCharacterFinishAllEventResponse
         {
-            MoodChange = events.Select(entry => entry.Character.CharacterId).Distinct().ToDictionary(id => id, _ => 0),
-            RewardGoods = rewards?.RewardGoods ?? []
+            MoodChange = resolved.Select(entry => entry.Entry.Character.CharacterId).Distinct().ToDictionary(id => id, _ => 0),
+            RewardGoods = rewards.RewardGoods
         }, packet.Id);
     }
 

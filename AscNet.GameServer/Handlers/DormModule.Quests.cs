@@ -3,6 +3,7 @@ using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.dormitory.character;
 using AscNet.Table.V2.share.dormitory.quest;
+using AscNet.Table.V2.share.alarmclock;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MessagePack;
@@ -59,6 +60,27 @@ internal partial class DormModule
     private const int QuestFileNotCollect = 20060079;
     private const int QuestConditionNotFinish = 20060080;
 
+    private static readonly Lazy<uint> QuestDailyRefreshOffset = new(() =>
+        checked((uint)TableReaderV2.Parse<AlarmClockTable>()
+            .Where(row => row.AlarmCycle == 86_400 && row.EpochTime > 0)
+            .GroupBy(row => row.EpochTime!.Value)
+            .OrderByDescending(group => group.Count())
+            .First().Key));
+
+    internal static void RefreshQuestState(Session session)
+    {
+        if (session.player.Dorm.Quest.NextRefreshTime == 0)
+            return;
+        bool boardChanged = NormalizeQuestState(session, QuestNow());
+        if (!boardChanged)
+            return;
+
+        session.SendPush(new NotifyDormQuestData
+        {
+            TotalQuest = session.player.Dorm.Quest.TotalQuest.Select(Quest).ToList(),
+            QuestAccept = session.player.Dorm.Quest.QuestAccept.Select(Accept).ToList()
+        });
+    }
     internal static NotifyDormitoryData.NotifyDormitoryDataDormQuestData BuildQuestLoginData(Session session)
     {
         uint now = QuestNow();
@@ -78,7 +100,7 @@ internal partial class DormModule
     public static void QuestUpgradeTerminalLvRequestHandler(Session session, Packet.Request packet)
     {
         uint now = QuestNow();
-        NormalizeQuestState(session, now);
+        RefreshQuestState(session);
         PlayerDormQuestState state = session.player.Dorm.Quest;
         QuestTerminalTable? terminal = Terminal(state.TerminalLv);
         int code = terminal is null ? QuestTerminalCfgError
@@ -116,7 +138,7 @@ internal partial class DormModule
     public static void QuestAcceptRequestHandler(Session session, Packet.Request packet)
     {
         uint now = QuestNow();
-        NormalizeQuestState(session, now);
+        RefreshQuestState(session);
         QuestAcceptRequest request = packet.Deserialize<QuestAcceptRequest>();
         RefillExhaustedBoard(session, now);
         PlayerDormQuestState state = session.player.Dorm.Quest;
@@ -145,6 +167,7 @@ internal partial class DormModule
     {
         PlayerDormQuestState state = session.player.Dorm.Quest;
         uint now = QuestNow();
+        RefreshQuestState(session);
         Dictionary<int, QuestTable> quests = TableReaderV2.Parse<QuestTable>().ToDictionary(row => row.Id);
         List<PlayerDormPendingReward> pendingRewards = session.player.Dorm.PendingRewards.Where(pending => pending.Key.StartsWith($"dorm-quest:{session.player.PlayerData.Id}:", StringComparison.Ordinal)).ToList();
         List<PlayerDormQuestAccept> completed = pendingRewards.Count > 0
@@ -230,6 +253,7 @@ internal partial class DormModule
     public static void QuestRecallTeamRequestHandler(Session session, Packet.Request packet)
     {
         QuestRecallTeamRequest request = packet.Deserialize<QuestRecallTeamRequest>();
+        RefreshQuestState(session);
         PlayerDormQuestState state = session.player.Dorm.Quest;
         PlayerDormQuestAccept? accept = state.QuestAccept.FirstOrDefault(quest => quest.Index == request.Index && quest.ResetCount == request.ResetCount && !quest.IsAward);
         int code = accept is null ? QuestNotAccept : 0;
@@ -245,6 +269,7 @@ internal partial class DormModule
     [RequestPacketHandler("QuestReadFileRequest")]
     public static void QuestReadFileRequestHandler(Session session, Packet.Request packet)
     {
+        RefreshQuestState(session);
         QuestReadFileRequest request = packet.Deserialize<QuestReadFileRequest>();
         PlayerDormCollectFile? file = session.player.Dorm.Quest.CollectFiles.FirstOrDefault(file => file.FileId == request.FileId);
         int code = file is null ? QuestFileNotCollect : 0;
@@ -252,14 +277,15 @@ internal partial class DormModule
         session.SendResponse(new QuestReadFileResponse { Code = code }, packet.Id);
     }
 
-    private static void NormalizeQuestState(Session session, uint now)
+    private static bool NormalizeQuestState(Session session, uint now)
     {
         PlayerDormQuestState state = session.player.Dorm.Quest;
         bool changed = false;
+        bool boardChanged = false;
         state.TerminalLv = Math.Max(1, state.TerminalLv);
         if (Terminal(state.TerminalLv) is null) { state.TerminalLv = 1; changed = true; }
         QuestTerminalTable? terminal = Terminal(state.TerminalLv);
-        if (terminal is null) return;
+        if (terminal is null) return false;
         bool completedUpgrade = state.TerminalUpgradeStatus != 0 && terminal.NeedTime > 0 && now >= state.TerminalUpgradeTime + terminal.NeedTime;
         if (completedUpgrade)
         {
@@ -271,6 +297,19 @@ internal partial class DormModule
             changed = true;
         }
         terminal = Terminal(state.TerminalLv)!;
+        if (state.NextRefreshTime == 0)
+        {
+            state.NextRefreshTime = NextQuestRefreshTime(now);
+            changed = true;
+        }
+        else if (now >= state.NextRefreshTime)
+        {
+            state.ResetCount++;
+            state.TotalQuest = BuildBoard(session, terminal, state.ResetCount);
+            state.NextRefreshTime = NextQuestRefreshTime(now);
+            changed = true;
+            boardChanged = true;
+        }
         int expectedCount = BoardCount(session, terminal);
         bool invalid = state.TotalQuest.Count != expectedCount || state.TotalQuest.Select(quest => quest.QuestId).Distinct().Count() != state.TotalQuest.Count || state.TotalQuest.Any(quest => quest.ResetCount != state.ResetCount);
         if (invalid)
@@ -279,9 +318,18 @@ internal partial class DormModule
             state.TotalQuest = BuildBoard(session, terminal, state.ResetCount);
             changed = true;
         }
-        if (RefillExhaustedBoard(session, now)) changed = true;
+        if (RefillExhaustedBoard(session, now))
+            changed = true;
         if (changed) session.player.SaveChecked();
         if (completedUpgrade) session.SendPush(new NotifyDormQuestTerminalInit { TerminalLv = state.TerminalLv, TotalQuest = state.TotalQuest.Select(Quest).ToList() });
+        return boardChanged;
+    }
+
+    private static uint NextQuestRefreshTime(uint now)
+    {
+        const uint day = 24 * 60 * 60;
+        uint next = checked(now - now % day + QuestDailyRefreshOffset.Value);
+        return next > now ? next : checked(next + day);
     }
     private static bool RefillExhaustedBoard(Session session, uint now)
     {

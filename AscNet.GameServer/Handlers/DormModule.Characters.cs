@@ -28,6 +28,7 @@ internal partial class DormModule
     private const int InvalidFondleType = 20060059;
     private const int EventTemplateMissing = 20060010;
     private const int EventAbsent = 20060012;
+    private const int EventRewardTemplateMissing = 20060044;
     private const int NotWorking = 20060027;
     private const int MoodLow = 20060045;
 
@@ -83,8 +84,60 @@ internal partial class DormModule
     }
 
     [RequestPacketHandler("DormCharacterOperateRequest")]
-    public static void DormCharacterOperateRequestHandler(Session session, Packet.Request packet) =>
-        session.SendResponse(new DormCharacterOperateResponse { Code = DormRequestDataInvalid }, packet.Id);
+    public static void DormCharacterOperateRequestHandler(Session session, Packet.Request packet)
+    {
+        DormCharacterOperateRequest request = packet.Deserialize<DormCharacterOperateRequest>();
+        PlayerDormCharacter? character = session.player.Dorm.Characters.FirstOrDefault(entry => entry.CharacterId == request.CharacterId);
+        if (character is null)
+        {
+            session.SendResponse(new DormCharacterOperateResponse { Code = InvalidCharacter }, packet.Id);
+            return;
+        }
+        DormCharacterEventTable? row = TableReaderV2.Parse<DormCharacterEventTable>()
+            .FirstOrDefault(entry => entry.EventId == request.EventId && entry.CharacterId == request.CharacterId);
+        if (row is null)
+        {
+            session.SendResponse(new DormCharacterOperateResponse { Code = EventTemplateMissing }, packet.Id);
+            return;
+        }
+        PlayerDormEvent? dormEvent = character.EventList.FirstOrDefault(entry => entry.EventId == request.EventId);
+        if (dormEvent is null)
+        {
+            session.SendResponse(new DormCharacterOperateResponse { Code = EventAbsent }, packet.Id);
+            return;
+        }
+        if (request.OperateType != 1)
+        {
+            session.SendResponse(new DormCharacterOperateResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+        List<RewardGoodsTable> goods = DormEventReward(row.FinishReward);
+        if (goods.Count == 0)
+        {
+            session.SendResponse(new DormCharacterOperateResponse { Code = EventRewardTemplateMissing }, packet.Id);
+            return;
+        }
+
+        RewardApplicationResult rewards;
+        try
+        {
+            rewards = RewardHandler.ApplyRewardsOnceAndPersist(
+                [new RewardGrant($"dorm-event:{session.player.PlayerData.Id}:{character.CharacterId}:{dormEvent.EventId}:{dormEvent.EndTime}", goods)],
+                session);
+            character.EventList.Remove(dormEvent);
+            session.player.SaveChecked();
+        }
+        catch
+        {
+            if (!character.EventList.Contains(dormEvent))
+                character.EventList.Add(dormEvent);
+            session.SendResponse(new DormCharacterOperateResponse { Code = DormRequestDataInvalid }, packet.Id);
+            return;
+        }
+
+        rewards.SendPushes(session);
+        session.SendResponse(new DormCharacterOperateResponse { MoodValue = 0, RewardGoods = rewards.RewardGoods }, packet.Id);
+    }
 
     [RequestPacketHandler("DormWordDoneRequest")]
     public static void DormWordDoneRequestHandler(Session session, Packet.Request packet)

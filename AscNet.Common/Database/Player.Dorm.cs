@@ -192,6 +192,7 @@ public sealed class PlayerDormVisit
 public sealed class PlayerDormQuestState
 {
     [BsonElement("reset_count")] public int ResetCount { get; set; }
+    [BsonElement("next_refresh_time")] public uint NextRefreshTime { get; set; }
     [BsonElement("terminal_lv")] public int TerminalLv { get; set; } = 1;
     [BsonElement("terminal_upgrade_exp")] public int TerminalUpgradeExp { get; set; }
     [BsonElement("finish_quest_count")] public int FinishQuestCount { get; set; }
