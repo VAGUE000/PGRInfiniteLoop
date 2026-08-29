@@ -2387,7 +2387,36 @@ namespace AscNet.GameServer.Handlers
             }
             if (session.player.Stronghold.PendingStageId == (int)req.Result.StageId)
             {
+                if (req.Result.IsWin && session.stage is not null)
+                {
+                    StageDatum strongholdStageDatum = session.stage.Stages.GetValueOrDefault(req.Result.StageId) ?? new StageDatum
+                    {
+                        StageId = req.Result.StageId,
+                        CreateTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    };
+                    strongholdStageDatum.Passed = true;
+                    strongholdStageDatum.StarsMark |= 7;
+                    session.stage.AddStage(strongholdStageDatum);
+                    session.stage.Save();
+                }
                 StrongholdFightResult strongholdResult = StrongholdModule.Settle(session.player, req.Result.IsWin, session);
+                StrongholdGroupInfo? groupInfo = session.player.Stronghold.GroupInfos
+                    .FirstOrDefault(group => group.Id == strongholdResult.GroupFightResultInfos.FirstOrDefault()?.GroupId);
+                if (groupInfo is not null)
+                    session.SendPush(new NotifyUpdateStrongholdGroupData { GroupInfo = groupInfo });
+                int settledGroupId = strongholdResult.GroupFightResultInfos.FirstOrDefault()?.GroupId ?? 0;
+                bool groupFinished = settledGroupId > 0 && session.player.Stronghold.FinishGroupIds.Contains(settledGroupId);
+                if (groupFinished)
+                    session.SendPush(new NotifyStrongholdFinishGroupId
+                    {
+                        FinishGroupIds = session.player.Stronghold.FinishGroupIds.ToList(),
+                        ElectricEnergy = session.player.Stronghold.ElectricEnergy,
+                        FinishGroupInfos = session.player.Stronghold.FinishGroupInfos.ToList(),
+                        HistoryFinishGroupInfos = session.player.Stronghold.HistoryFinishGroupInfos.ToList()
+                    });
+                if (groupFinished)
+                    session.SendPush(new NotifyDeleteStrongholdGroupData { Id = settledGroupId });
+                session.SendPush(new NotifyStrongholdEnduranceData { Endurance = session.player.Stronghold.Endurance });
                 FightSettleResponse.FightSettleResponseSettle settle = new()
                 {
                     IsWin = req.Result.IsWin,

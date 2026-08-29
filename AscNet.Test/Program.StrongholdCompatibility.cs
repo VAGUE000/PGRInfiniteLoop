@@ -2,8 +2,11 @@ using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.GameServer;
 using AscNet.GameServer.Handlers;
+using AscNet.Common.Util;
 using MongoDB.Bson;
 using MessagePack;
+using AscNet.Table.V2.share.condition;
+using AscNet.Table.V2.share.fuben.stronghold;
 
 namespace AscNet.Test;
 
@@ -47,23 +50,199 @@ internal partial class Program
         Call<GetStrongholdAssistCharacterListResponse>("GetStrongholdAssistCharacterListRequest", 48_817, new GetStrongholdAssistCharacterListRequest(), nameof(GetStrongholdAssistCharacterListResponse));
         Call<SetStrongholdAssistCharacterResponse>("SetStrongholdAssistCharacterRequest", 48_818, new SetStrongholdAssistCharacterRequest { CharacterId = 1_021_001 }, nameof(SetStrongholdAssistCharacterResponse));
         Call<GetStrongholdLendDetailResponse>("GetStrongholdLendDetailRequest", 48_819, new GetStrongholdLendDetailRequest(), nameof(GetStrongholdLendDetailResponse));
-        Call<GetStrongholdRewardResponse>("GetStrongholdRewardRequest", 48_820, new GetStrongholdRewardRequest { Ids = [-1] }, nameof(GetStrongholdRewardResponse));
-        Call<SweepStrongholdStageResponse>("SweepStrongholdStageRequest", 48_821, new SweepStrongholdStageRequest { GroupId = -1 }, nameof(SweepStrongholdStageResponse));
-        Call<SelectStrongholdLevelResponse>("SelectStrongholdLevelRequest", 48_822, new SelectStrongholdLevelRequest { LevelId = 1 }, nameof(SelectStrongholdLevelResponse));
-        int groupId = player.Stronghold.GroupStageDatas.First(value => value.StageIds.Count > 1).Id;
-        Call<SetStrongholdFightTeamResponse>("SetStrongholdFightTeamRequest", 48_824, new SetStrongholdFightTeamRequest
+        int levelId = TableReaderV2.Parse<AscNet.Table.V2.share.fuben.stronghold.StrongholdLevelTable>()
+            .Where(row => player.PlayerData.Level >= row.MinLevel && player.PlayerData.Level <= row.MaxLevel)
+            .Select(row => row.Id).First();
+        Call<SelectStrongholdLevelResponse>("SelectStrongholdLevelRequest", 48_822,
+            new SelectStrongholdLevelRequest { LevelId = levelId }, nameof(SelectStrongholdLevelResponse));
+        List<AscNet.Table.V2.share.fuben.stronghold.StrongholdGroupTable> groupRows =
+            TableReaderV2.Parse<AscNet.Table.V2.share.fuben.stronghold.StrongholdGroupTable>();
+        int groupId = player.Stronghold.GroupStageDatas
+            .First(value => value.StageIds.Count > 1
+                && groupRows.Single(row => row.Id == value.Id).PreId is not > 0).Id;
+        int lockedGroupId = player.Stronghold.GroupStageDatas
+            .First(value => groupRows.Single(row => row.Id == value.Id).PreId is > 0).Id;
+        StrongholdGroupStageData groupStages = player.Stronghold.GroupStageDatas.Single(value => value.Id == groupId);
+        StrongholdGroupStageData lockedGroupStages = player.Stronghold.GroupStageDatas.Single(value => value.Id == lockedGroupId);
+        uint firstStage = groupStages.StageIds[0];
+        uint lockedStage = lockedGroupStages.StageIds[0];
+
+        byte[] beforeSweep = player.ToBson();
+        InvokeRegisteredRequestHandler(nameof(SweepStrongholdStageRequest), h.Session, 48_823,
+            new SweepStrongholdStageRequest { GroupId = groupId });
+        AssertEqual(true, ReadResponsePayload<SweepStrongholdStageResponse>(
+            h, 48_823, nameof(SweepStrongholdStageResponse), "Stronghold sweep before normal clear").Code != 0,
+            "Stronghold sweep rejects an uncleared stage");
+        AssertEqual(Convert.ToHexString(beforeSweep), Convert.ToHexString(player.ToBson()),
+            "Stronghold sweep rejection does not mutate state");
+
+        Call<SetStrongholdFightTeamResponse>("SetStrongholdFightTeamRequest", 48_824,
+            new SetStrongholdFightTeamRequest
+            {
+                Id = lockedGroupId,
+                TeamInfos = [new StrongholdTeamInfo
+                {
+                    Id = 1,
+                    CharacterInfos = [new StrongholdCharacterInfo { Id = 1_021_001, Pos = 1 }]
+                }]
+            }, nameof(SetStrongholdFightTeamResponse));
+        byte[] beforePrerequisite = player.ToBson();
+        InvokeRegisteredRequestHandler(nameof(PreFightRequest), h.Session, 48_825,
+            new PreFightRequest { PreFightData = new() { StageId = lockedStage, CardIds = [1_021_001], CaptainPos = 1, FirstFightPos = 1 } });
+        AssertEqual(true, ReadResponsePayload<PreFightResponse>(
+            h, 48_825, nameof(PreFightResponse), "Stronghold locked-group pre-fight").Code != 0,
+            "Stronghold pre-fight rejects a group whose table predecessor is uncleared");
+        AssertEqual(Convert.ToHexString(beforePrerequisite), Convert.ToHexString(player.ToBson()),
+            "Stronghold prerequisite rejection does not mutate state");
+        AssertEqual(null, h.Session.fight, "Stronghold prerequisite rejection does not start a fight");
+
+        Call<SetStrongholdFightTeamResponse>("SetStrongholdFightTeamRequest", 48_826,
+            new SetStrongholdFightTeamRequest
+            {
+                Id = groupId,
+                TeamInfos = [new StrongholdTeamInfo
+                {
+                    Id = 1,
+                    CharacterInfos = [new StrongholdCharacterInfo { Id = 1_021_001, Pos = 1 }]
+                }]
+            }, nameof(SetStrongholdFightTeamResponse));
+        InvokeRegisteredRequestHandler(nameof(PreFightRequest), h.Session, 48_827,
+            new PreFightRequest { PreFightData = new() { StageId = firstStage, CardIds = [1_021_001], CaptainPos = 1, FirstFightPos = 1 } });
+        PreFightResponse firstPreFight = ReadResponsePayload<PreFightResponse>(
+            h, 48_827, nameof(PreFightResponse), "Stronghold normal pre-fight");
+        AssertEqual(0, firstPreFight.Code, "Stronghold normal pre-fight code");
+        InvokeRegisteredRequestHandler(nameof(FightSettleRequest), h.Session, 48_828,
+            CreateMissingStageSettleRequest(firstStage, firstPreFight.FightData.FightId, uid));
+        FightSettleResponse firstSettle = ReadResponsePayload<FightSettleResponse>(
+            h, 48_828, nameof(FightSettleResponse), "Stronghold normal settle");
+        AssertEqual(0, firstSettle.Code, "Stronghold normal settle code");
+        AssertEqual(true, player.Stronghold.GroupInfos.Single(value => value.Id == groupId).FinishStageIds.Contains((int)firstStage),
+            "Stronghold normal settle persists the exact stage clear");
+        AssertEqual(true, player.Stronghold.PendingStageId > 0,
+            "Stronghold normal settle preserves the next selectable stage");
+
+        int sweepPacketId = 48_829;
+        while (!player.Stronghold.FinishGroupIds.Contains(groupId))
         {
-            Id = groupId,
-            TeamInfos = [new StrongholdTeamInfo { Id = 1, CharacterInfos = [new StrongholdCharacterInfo { Id = 1_021_001, Pos = 1 }] }]
-        }, nameof(SetStrongholdFightTeamResponse));
-        var settle = RequiredMethod(module, "Settle", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic, [typeof(Player), typeof(bool), typeof(Session)]);
-        settle.Invoke(null, [player, true, h.Session]);
-        int nextStage = player.Stronghold.PendingStageId;
-        AssertEqual(true, nextStage > 0, "Winning a stage preserves the pending group and advances");
-        while (player.Stronghold.PendingStageId > 0)
-            settle.Invoke(null, [player, true, h.Session]);
-        AssertEqual(true, player.Stronghold.FinishGroupIds.Contains(groupId), "Final settlement completes the group");
-        AssertEqual(true, h.Session.inventory.AppliedRewardClaims.Any(key => key.StartsWith($"stronghold:{uid}:{player.Stronghold.ActivityId}:{groupId}", StringComparison.Ordinal)), "Final settlement applies configured reward exactly once");
+            InvokeRegisteredRequestHandler(nameof(SweepStrongholdStageRequest), h.Session, sweepPacketId++,
+                new SweepStrongholdStageRequest { GroupId = groupId });
+            SweepStrongholdStageResponse sweep = ReadResponsePayload<SweepStrongholdStageResponse>(
+                h, sweepPacketId - 1, nameof(SweepStrongholdStageResponse), "Stronghold sweep after normal clear");
+            AssertEqual(0, sweep.Code, "Stronghold sweep after normal clear code");
+        }
+        AssertEqual(true, player.Stronghold.FinishGroupIds.Contains(groupId),
+            "Stronghold sweep completes the remaining table stages");
+        byte[] beforeDuplicateSweep = player.ToBson();
+        InvokeRegisteredRequestHandler(nameof(SweepStrongholdStageRequest), h.Session, sweepPacketId++,
+            new SweepStrongholdStageRequest { GroupId = groupId });
+        AssertEqual(true, ReadResponsePayload<SweepStrongholdStageResponse>(
+            h, sweepPacketId - 1, nameof(SweepStrongholdStageResponse), "Stronghold duplicate sweep").Code != 0,
+            "Stronghold duplicate sweep rejects a completed group");
+        AssertEqual(Convert.ToHexString(beforeDuplicateSweep), Convert.ToHexString(player.ToBson()),
+            "Stronghold duplicate sweep does not mutate state");
+        int rewardClaims = h.Session.inventory.AppliedRewardClaims.Count(key =>
+            key.StartsWith($"stronghold:{uid}:{player.Stronghold.ActivityId}:{groupId}", StringComparison.Ordinal));
+        AssertEqual(1, rewardClaims, "Stronghold group reward is applied once");
+        byte[] finishedState = player.ToBson();
+        NotifyStrongholdLoginData settledLogin = (NotifyStrongholdLoginData)RequiredMethod(module, "BuildLoginData",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic, [typeof(Player)]).Invoke(null, [player])!;
+        AssertEqual(true, settledLogin.FinishGroupIds.Contains(groupId), "Stronghold relogin exposes the finished group");
+        Player reloadedSettlement = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Player>(finishedState);
+        AssertEqual(true, reloadedSettlement.Stronghold.FinishGroupIds.Contains(groupId),
+            "Stronghold finished group persists through relogin");
+        AssertEqual(finishedState.Length, reloadedSettlement.ToBson().Length, "Stronghold relogin state round-trips");
+
+        List<ConditionTable> rewardConditions = TableReaderV2.Parse<ConditionTable>();
+        List<(StrongholdRewardTable reward, ConditionTable condition)> claimRows = TableReaderV2.Parse<StrongholdRewardTable>()
+            .Where(row => row.LevelId == player.Stronghold.LevelId)
+            .Join(rewardConditions.Where(condition => condition.Type is 10131 or 12103),
+                reward => reward.Condition, condition => condition.Id, (reward, condition) => (reward, condition))
+            .GroupBy(pair => pair.condition.Type is 10131 ? pair.condition.Type : pair.condition.Id)
+            .Select(group => group.First())
+            .ToList();
+        AssertEqual(3, claimRows.Count, "Stronghold reward fixture covers 10131 and two 12103 rows");
+        int rewardPacketId = 48_840;
+        (StrongholdRewardTable reward, ConditionTable condition) row10131 =
+            claimRows.Single(pair => pair.condition.Type == 10131);
+        List<(StrongholdRewardTable reward, ConditionTable condition)> energyRows =
+            claimRows.Where(pair => pair.condition.Type == 12103).ToList();
+        AssertEqual(2, energyRows.Count, "Stronghold reward fixture covers two distinct 12103 conditions");
+        (StrongholdRewardTable reward, ConditionTable condition) missingEnergy = energyRows[0];
+        (StrongholdRewardTable reward, ConditionTable condition) exactEnergy = energyRows[1];
+        player.Stronghold.FinishGroupIds = claimRows
+            .Select(pair => pair.condition.Params[0]).Distinct().ToList();
+        player.Stronghold.FinishGroupInfos.Clear();
+        player.Stronghold.HistoryFinishGroupInfos.Clear();
+        StrongholdFinishGroupInfo exactInfo = new() { Id = exactEnergy.condition.Params[0] };
+        if (exactEnergy.condition.Params[2] != 0)
+            exactInfo.UsedSystemElectricEnergy = exactEnergy.condition.Params[1];
+        else
+            exactInfo.UsedElectricEnergy = exactEnergy.condition.Params[1];
+        player.Stronghold.FinishGroupInfos.Add(exactInfo);
+
+        player.Stronghold.FinishGroupIds.Remove(exactEnergy.condition.Params[0]);
+        byte[] beforeStaleEnergy = player.ToBson();
+        InvokeRegisteredRequestHandler(nameof(GetStrongholdRewardRequest), h.Session, rewardPacketId,
+            new GetStrongholdRewardRequest { Ids = [exactEnergy.reward.Id] });
+        AssertEqual(20113018, ReadResponsePayload<GetStrongholdRewardResponse>(
+            h, rewardPacketId++, nameof(GetStrongholdRewardResponse), "Stronghold stale 12103 reward claim").Code,
+            "Stronghold 12103 rejects stale finish info without finished-group membership");
+        AssertEqual(Convert.ToHexString(beforeStaleEnergy), Convert.ToHexString(player.ToBson()),
+            "Stronghold stale 12103 rejection is atomic");
+        player.Stronghold.FinishGroupIds.Add(exactEnergy.condition.Params[0]);
+        exactInfo.UsedSystemElectricEnergy = exactEnergy.condition.Params[2] != 0
+            ? exactEnergy.condition.Params[1] + 1 : exactInfo.UsedSystemElectricEnergy;
+        exactInfo.UsedElectricEnergy = exactEnergy.condition.Params[2] == 0
+            ? exactEnergy.condition.Params[1] + 1 : exactInfo.UsedElectricEnergy;
+        byte[] beforeOverThreshold = player.ToBson();
+        InvokeRegisteredRequestHandler(nameof(GetStrongholdRewardRequest), h.Session, rewardPacketId,
+            new GetStrongholdRewardRequest { Ids = claimRows.Select(pair => pair.reward.Id).ToList() });
+        AssertEqual(20113018, ReadResponsePayload<GetStrongholdRewardResponse>(
+            h, rewardPacketId++, nameof(GetStrongholdRewardResponse), "Stronghold over-threshold reward batch").Code,
+            "Stronghold over-threshold 12103 rejects the whole reward batch");
+        AssertEqual(Convert.ToHexString(beforeOverThreshold), Convert.ToHexString(player.ToBson()),
+            "Stronghold over-threshold batch rejection is atomic");
+
+        player.Stronghold.FinishGroupInfos.Clear();
+        InvokeRegisteredRequestHandler(nameof(GetStrongholdRewardRequest), h.Session, rewardPacketId,
+            new GetStrongholdRewardRequest { Ids = [missingEnergy.reward.Id] });
+        GetStrongholdRewardResponse missingEnergyResponse = ReadResponsePayload<GetStrongholdRewardResponse>(
+            h, rewardPacketId++, nameof(GetStrongholdRewardResponse), "Stronghold missing current energy reward");
+        AssertEqual(0, missingEnergyResponse.Code, "Stronghold missing current 12103 info uses client sentinel");
+        AssertEqual(true, player.Stronghold.ClaimedRewardIds.Contains(missingEnergy.reward.Id),
+            "Stronghold missing current 12103 info claim persists");
+        player.Stronghold.FinishGroupInfos.Add(exactInfo);
+        if (exactEnergy.condition.Params[2] != 0)
+            exactInfo.UsedSystemElectricEnergy = exactEnergy.condition.Params[1];
+        else
+            exactInfo.UsedElectricEnergy = exactEnergy.condition.Params[1];
+        InvokeRegisteredRequestHandler(nameof(GetStrongholdRewardRequest), h.Session, rewardPacketId,
+            new GetStrongholdRewardRequest { Ids = [row10131.reward.Id, exactEnergy.reward.Id] });
+        GetStrongholdRewardResponse eligibleBatch = ReadResponsePayload<GetStrongholdRewardResponse>(
+            h, rewardPacketId++, nameof(GetStrongholdRewardResponse), "Stronghold eligible reward batch");
+        AssertEqual(0, eligibleBatch.Code, "Stronghold 10131 and exact 12103 eligible batch code");
+        AssertEqual(true, eligibleBatch.SuccessIds.SequenceEqual([row10131.reward.Id, exactEnergy.reward.Id]),
+            "Stronghold eligible reward batch success IDs");
+        AssertEqual(true, player.Stronghold.ClaimedRewardIds.Contains(row10131.reward.Id)
+            && player.Stronghold.ClaimedRewardIds.Contains(exactEnergy.reward.Id),
+            "Stronghold eligible reward batch persists claimed IDs");
+        int claimedRewardId = missingEnergy.reward.Id;
+        int claimCount = h.Session.inventory.AppliedRewardClaims.Count(key =>
+            key == $"stronghold:{uid}:achievement:{claimedRewardId}");
+        byte[] beforeDuplicateClaim = player.ToBson();
+        InvokeRegisteredRequestHandler(nameof(GetStrongholdRewardRequest), h.Session, rewardPacketId,
+            new GetStrongholdRewardRequest { Ids = [claimedRewardId] });
+        AssertEqual(20113018, ReadResponsePayload<GetStrongholdRewardResponse>(
+            h, rewardPacketId++, nameof(GetStrongholdRewardResponse), "Stronghold duplicate reward claim").Code,
+            "Stronghold duplicate reward claim uses retail rejection code");
+        AssertEqual(claimCount, h.Session.inventory.AppliedRewardClaims.Count(key =>
+            key == $"stronghold:{uid}:achievement:{claimedRewardId}"),
+            "Stronghold duplicate reward claim does not grant twice");
+        AssertEqual(Convert.ToHexString(beforeDuplicateClaim), Convert.ToHexString(player.ToBson()),
+            "Stronghold duplicate reward claim does not mutate player state");
+        Player reloadedRewards = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Player>(player.ToBson());
+        AssertEqual(true, claimRows.All(pair => reloadedRewards.Stronghold.ClaimedRewardIds.Contains(pair.reward.Id)),
+            "Stronghold reward claims persist through relogin");
 
         NotifyStrongholdLoginData login = (NotifyStrongholdLoginData)RequiredMethod(module, "BuildLoginData", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic, [typeof(Player)]).Invoke(null, [player])!;
         AssertEqual(player.Stronghold.StayDays.Count, login.StayDays.Count, "Stronghold login state survives endpoint dispatch");
@@ -225,11 +404,64 @@ internal partial class Program
                     "legacy login Stronghold null state is repaired before wire");
             }
         }
-        AssertEqual(true, legacyPackets.Contains(nameof(NotifyRepeatChallengeData)), "legacy login keeps RepeatChallenge visible");
-        AssertEqual(true, legacyPackets.Contains(nameof(NotifyArenaActivity)), "legacy login keeps Arena visible");
         AssertEqual(true, legacyPackets.Contains(nameof(NotifyTransfiniteData)), "legacy login keeps Transfinite visible");
         AssertEqual(true, legacyPackets.Contains(nameof(NotifyStrongholdLoginData)),
             "legacy login repairs and emits Stronghold integration");
+
+        int claimedOnlyRewardId = row10131.reward.Id;
+        int rewardOnlyRewardId = exactEnergy.reward.Id;
+        int[] expectedLegacyRewardIds = [claimedOnlyRewardId, rewardOnlyRewardId];
+        expectedLegacyRewardIds = expectedLegacyRewardIds.Distinct().OrderBy(id => id).ToArray();
+        player.Stronghold.RewardIds = [];
+        player.Stronghold.ClaimedRewardIds = [rewardOnlyRewardId, claimedOnlyRewardId, rewardOnlyRewardId];
+        RequiredMethod(module, "PrepareLogin", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic,
+            [typeof(Player)]).Invoke(null, [player]);
+        NotifyStrongholdLoginData claimedOnlyLogin = (NotifyStrongholdLoginData)RequiredMethod(
+            module, "BuildLoginData", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic,
+            [typeof(Player)]).Invoke(null, [player])!;
+        AssertEqual(true, claimedOnlyLogin.RewardIds.SequenceEqual(expectedLegacyRewardIds),
+            "claimed-only legacy rewards project on login");
+        AssertEqual(true, player.Stronghold.RewardIds.SequenceEqual(player.Stronghold.ClaimedRewardIds),
+            "claimed-only legacy rewards normalize both persisted lists");
+        AssertEqual(false, ReferenceEquals(player.Stronghold.RewardIds, player.Stronghold.ClaimedRewardIds),
+            "Stronghold canonical reward lists do not alias");
+        Player reloadedClaimedOnly = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Player>(player.ToBson());
+        AssertEqual(true, reloadedClaimedOnly.Stronghold.RewardIds.SequenceEqual(expectedLegacyRewardIds)
+            && reloadedClaimedOnly.Stronghold.ClaimedRewardIds.SequenceEqual(expectedLegacyRewardIds),
+            "claimed-only legacy rewards BSON round-trip preserves canonical lists");
+        byte[] normalizedState = player.ToBson();
+        _ = RequiredMethod(module, "BuildLoginData", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic,
+            [typeof(Player)]).Invoke(null, [player]);
+        AssertEqual(Convert.ToHexString(normalizedState), Convert.ToHexString(player.ToBson()),
+            "Stronghold reward normalization is idempotent");
+
+        byte[] beforeClaimedOnlyRetry = player.ToBson();
+        int claimedOnlyClaimCount = h.Session.inventory.AppliedRewardClaims.Count(key =>
+            key == $"stronghold:{uid}:achievement:{claimedOnlyRewardId}");
+        int claimedOnlyRetryPacketId = rewardPacketId++;
+        InvokeRegisteredRequestHandler(nameof(GetStrongholdRewardRequest), h.Session, claimedOnlyRetryPacketId,
+            new GetStrongholdRewardRequest { Ids = [claimedOnlyRewardId] });
+        AssertEqual(20113018, ReadResponsePayload<GetStrongholdRewardResponse>(
+            h, claimedOnlyRetryPacketId, nameof(GetStrongholdRewardResponse), "Stronghold claimed-only duplicate reward claim").Code,
+            "claimed-only legacy reward retry uses retail rejection code");
+        AssertEqual(claimedOnlyClaimCount, h.Session.inventory.AppliedRewardClaims.Count(key =>
+            key == $"stronghold:{uid}:achievement:{claimedOnlyRewardId}"),
+            "claimed-only legacy reward retry does not grant twice");
+        AssertEqual(Convert.ToHexString(beforeClaimedOnlyRetry), Convert.ToHexString(player.ToBson()),
+            "claimed-only legacy reward retry does not mutate state");
+
+        player.Stronghold.RewardIds = [rewardOnlyRewardId];
+        player.Stronghold.ClaimedRewardIds = [];
+        RequiredMethod(module, "PrepareLogin", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic,
+            [typeof(Player)]).Invoke(null, [player]);
+        AssertEqual(true, player.Stronghold.RewardIds.SequenceEqual([rewardOnlyRewardId])
+            && player.Stronghold.ClaimedRewardIds.SequenceEqual([rewardOnlyRewardId]),
+            "reward-only legacy state migrates both persisted lists");
+        Player reloadedRewardOnly = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<Player>(player.ToBson());
+        AssertEqual(true, reloadedRewardOnly.Stronghold.RewardIds.SequenceEqual([rewardOnlyRewardId])
+            && reloadedRewardOnly.Stronghold.ClaimedRewardIds.SequenceEqual([rewardOnlyRewardId]),
+            "reward-only legacy state BSON round-trip preserves canonical lists");
+
         Console.WriteLine("Stronghold compatibility: loopback endpoints, exact responses, boundaries, login, continuation, rewards, and relogin passed.");
     }
 }

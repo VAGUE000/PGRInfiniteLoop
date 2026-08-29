@@ -1,3 +1,4 @@
+using AscNet.Table.V2.share.condition;
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
@@ -75,6 +76,10 @@ internal static class StrongholdModule
         state.StayDays ??= [];
         state.MineRecords ??= [];
         state.ClaimedRewardIds ??= [];
+        state.RewardIds.AddRange(state.ClaimedRewardIds);
+        state.RewardIds = state.RewardIds.Distinct().OrderBy(id => id).ToList();
+        state.ClaimedRewardIds.Clear();
+        state.ClaimedRewardIds.AddRange(state.RewardIds);
         state.LastResultRecord ??= new();
         foreach (StrongholdGroupInfo group in state.GroupInfos)
             group.FinishStageIds ??= [];
@@ -95,6 +100,32 @@ internal static class StrongholdModule
             team.PluginInfos ??= [];
         }
     }
+    private static bool IsRewardEligible(StrongholdState state, StrongholdRewardTable reward)
+    {
+        if (reward.LevelId != state.LevelId) return false;
+        ConditionTable? condition = Rows<ConditionTable>().FirstOrDefault(row => row.Id == reward.Condition);
+        if (condition is null) return false;
+        return condition.Type switch
+        {
+            10130 => condition.Params.Count > 0
+                && state.FinishGroupIds.Count(id => id > 0) >= condition.Params[0],
+            10131 => condition.Params.Count > 0
+                && state.FinishGroupIds.Contains(condition.Params[0]),
+            10132 => condition.Params.Count > 0
+                && state.TotalMineral >= condition.Params[0],
+            12103 => condition.Params.Count >= 3
+                && (condition.Params.Count > 3 && condition.Params[3] != 0
+                    ? state.HistoryFinishGroupInfos.FirstOrDefault(info => info.Id == condition.Params[0]) is { } historyInfo
+                        && (condition.Params[2] != 0 ? historyInfo.UsedSystemElectricEnergy : historyInfo.UsedElectricEnergy) <= condition.Params[1]
+                    : state.FinishGroupIds.Contains(condition.Params[0])
+                        && (condition.Params[2] != 0
+                            ? state.FinishGroupInfos.FirstOrDefault(info => info.Id == condition.Params[0])?.UsedSystemElectricEnergy ?? -1
+                            : state.FinishGroupInfos.FirstOrDefault(info => info.Id == condition.Params[0])?.UsedElectricEnergy ?? -1) <= condition.Params[1]),
+            _ => false
+        };
+    }
+
+
 
 
     internal static void PrepareLogin(Player p)
@@ -152,57 +183,102 @@ internal static class StrongholdModule
         StrongholdGroupInfo group = state.GroupInfos.FirstOrDefault(value => value.Id == groupId)
             ?? new StrongholdGroupInfo { Id = groupId };
         if (!state.GroupInfos.Contains(group)) state.GroupInfos.Add(group);
-        state.Endurance = Math.Max(0, state.Endurance - 1);
+        int enduranceCost = group.FinishStageIds.Count == 0
+            ? Rows<StrongholdGroupTable>().FirstOrDefault(value => value.Id == groupId)?.Endurance ?? 0
+            : 0;
+        state.Endurance = Math.Max(0, state.Endurance - enduranceCost);
+        state.PendingStageId = 0;
         if (!win)
         {
-            state.PendingGroupId = state.PendingStageId = 0;
             p.Save();
             result.GroupFightResultInfos.Add(new() { GroupId = groupId });
             return result;
         }
 
         if (!group.FinishStageIds.Contains(stageId)) group.FinishStageIds.Add(stageId);
+        state.LastResultRecord.FinishCount++;
         int next = Next(state, groupId);
-        if (next != 0)
-        {
+        bool groupFinished = next == 0;
+        if (!groupFinished)
             state.PendingStageId = next;
-            result.AllFinished = false;
-        }
         else
         {
-            if (!state.FinishGroupIds.Contains(groupId)) state.FinishGroupIds.Add(groupId);
-            state.PendingGroupId = state.PendingStageId = 0;
-            result.AllFinished = state.GroupStageDatas.Count > 0
-                && state.GroupStageDatas.All(value =>
-                    state.GroupInfos.FirstOrDefault(done => done.Id == value.Id)?.FinishStageIds.Count
-                    >= value.StageIds.Count);
-            StrongholdGroupTable? row = Rows<StrongholdGroupTable>().FirstOrDefault(value => value.Id == groupId);
-            int rewardId = row?.RewardId.Select(value => value is int id ? id : 0).FirstOrDefault(id => id > 0) ?? 0;
-            if (rewardId > 0)
+            result.AllFinished = true;
+            if (!state.FinishGroupIds.Contains(groupId))
             {
-                List<AscNet.Table.V2.share.reward.RewardGoodsTable> goods = RewardHandler.GetRewardGoods(rewardId);
-                RewardApplicationResult grant = RewardHandler.ApplyRewardsOnceAndPersist(
-                    [new RewardGrant($"stronghold:{p.PlayerData.Id}:{state.ActivityId}:{groupId}", goods)], session);
-                result.GroupFightResultInfos.Add(new() { GroupId = groupId, RewardGoodsList = grant.RewardGoods });
-                grant.SendPushes(session);
+                state.FinishGroupIds.Add(groupId);
+                state.FinishGroupInfos.Add(new() { Id = groupId });
+                state.HistoryFinishGroupInfos.Add(new() { Id = groupId });
             }
         }
-        if (result.GroupFightResultInfos.Count == 0)
-            result.GroupFightResultInfos.Add(new() { GroupId = groupId });
+
+        List<RewardGoods> goods = [];
+        if (groupFinished)
+        {
+            StrongholdGroupTable? row = Rows<StrongholdGroupTable>().FirstOrDefault(value => value.Id == groupId);
+            int rewardId = state.LevelId > 0 && state.LevelId <= (row?.RewardId.Count ?? 0)
+                ? row!.RewardId[state.LevelId - 1] is int id ? id : 0
+                : 0;
+            if (rewardId > 0)
+            {
+                List<AscNet.Table.V2.share.reward.RewardGoodsTable> rewardRows = RewardHandler.GetRewardGoods(rewardId);
+                RewardApplicationResult grant = RewardHandler.ApplyRewardsOnceAndPersist(
+                    [new RewardGrant($"stronghold:{p.PlayerData.Id}:{state.ActivityId}:{groupId}", rewardRows)], session);
+                goods = grant.RewardGoods;
+            }
+        }
+        result.GroupFightResultInfos.Add(new() { GroupId = groupId, RewardGoodsList = goods });
         p.Save();
         return result;
     }
 
     private static int Next(StrongholdState x,int id) { var stages=x.GroupStageDatas.FirstOrDefault(g=>g.Id==id)?.StageIds; var done=x.GroupInfos.FirstOrDefault(g=>g.Id==id)?.FinishStageIds??[]; return stages?.Select(v=>(int)v).FirstOrDefault(v=>!done.Contains(v))??0; }
+    private static bool IsGroupUnlocked(StrongholdState state, int groupId)
+    {
+        HashSet<int> seen = [];
+        while (groupId > 0 && seen.Add(groupId))
+        {
+            int? predecessor = Rows<StrongholdGroupTable>().FirstOrDefault(row => row.Id == groupId)?.PreId;
+            if (predecessor is not > 0) return true;
+            if (!state.FinishGroupIds.Contains(predecessor.Value)) return false;
+            groupId = predecessor.Value;
+        }
+        return false;
+    }
+    private static bool CanSweep(StrongholdState state, StrongholdGroupTable group)
+    {
+        int index = group.SweepLevelId.FindIndex(level => level == state.LevelId);
+        if (index < 0 || index >= group.SweepCondition.Count) return false;
+        int conditionId = group.SweepCondition[index];
+        ConditionTable? condition = Rows<ConditionTable>().FirstOrDefault(row => row.Id == conditionId);
+        if (condition?.Type != 12103 || condition.Params.Count < 4) return false;
+        int referencedGroup = condition.Params[0];
+        int threshold = condition.Params[1];
+        bool system = condition.Params[2] != 0;
+        bool history = condition.Params[3] != 0;
+        StrongholdFinishGroupInfo? record = (history ? state.HistoryFinishGroupInfos : state.FinishGroupInfos)
+            .FirstOrDefault(info => info.Id == referencedGroup);
+        if (record is null || (!history && !state.FinishGroupIds.Contains(referencedGroup))) return false;
+        return (system ? record.UsedSystemElectricEnergy : record.UsedElectricEnergy) <= threshold;
+    }
 
     internal static bool TryAuthorizePreFight(Player p, uint stageId, out int code)
     {
-        code=0; StrongholdState x=p.Stronghold;
-        if (x.PendingGroupId<=0 || x.PendingStageId!=(int)stageId) return false;
-        if (x.GroupStageDatas.FirstOrDefault(g=>g.Id==x.PendingGroupId)?.StageIds.Contains(stageId)!=true) { code=Invalid; return true; }
-        if (x.Endurance<=0) { code=20113054; return true; }
+        code = 0;
+        StrongholdState state = p.Stronghold;
+        StrongholdGroupStageData? stageData = state.GroupStageDatas.FirstOrDefault(group => group.StageIds.Contains(stageId));
+        if (stageData is null) return false;
+        if (!IsGroupUnlocked(state, stageData.Id)
+            || state.PendingGroupId != stageData.Id
+            || state.PendingStageId != (int)stageId)
+        {
+            code = Invalid;
+            return true;
+        }
+        if (state.Endurance <= 0) code = 20113054;
         return true;
     }
+
 
     [RequestPacketHandler("GetStrongholdMineralRequest")]
     public static void GetMineral(Session s, Packet.Request p)
@@ -301,20 +377,80 @@ internal static class StrongholdModule
     [RequestPacketHandler("GetStrongholdLendDetailRequest")]
     public static void Lend(Session s,Packet.Request p)=>s.SendResponse(new GetStrongholdLendDetailResponse{Code=0,LendDayInfos=[]},p.Id);
     [RequestPacketHandler("GetStrongholdRewardRequest")]
-    public static void Reward(Session s,Packet.Request p){var r=p.Deserialize<GetStrongholdRewardRequest>();var x=State(s);var rows=Rows<StrongholdRewardTable>();var ids=r.Ids.Distinct().Where(id=>!x.ClaimedRewardIds.Contains(id)).ToList();var goods=ids.SelectMany(id=>rows.FirstOrDefault(v=>v.Id==id) is {RewardId:int reward} ? RewardHandler.GetRewardGoods(reward):[]).ToList();if(goods.Count==0){s.SendResponse(new GetStrongholdRewardResponse{Code=Invalid},p.Id);return;}RewardHandler.ApplyRewardsOnceAndPersist(ids.Select(id=>new RewardGrant($"stronghold:{s.player.PlayerData.Id}:{id}",rows.First(v=>v.Id==id).RewardId is int q?RewardHandler.GetRewardGoods(q):[])).ToList(),s);x.ClaimedRewardIds.AddRange(ids);Save(s);s.SendResponse(new GetStrongholdRewardResponse{Code=0,SuccessIds=ids,RewardGoodsList=goods.Select(g=>new RewardGoods{Id=g.Id,TemplateId=g.TemplateId,Count=g.Count}).ToList()},p.Id);}
+    public static void Reward(Session s, Packet.Request p)
+    {
+        GetStrongholdRewardRequest request = p.Deserialize<GetStrongholdRewardRequest>();
+        StrongholdState state = State(s);
+        List<int> ids = request.Ids.Distinct().ToList();
+        List<StrongholdRewardTable> rows = Rows<StrongholdRewardTable>()
+            .Where(row => ids.Contains(row.Id)
+                && !state.RewardIds.Contains(row.Id)
+                && !state.ClaimedRewardIds.Contains(row.Id)
+                && IsRewardEligible(state, row))
+            .ToList();
+        if (ids.Count == 0 || rows.Count != ids.Count)
+        {
+            s.SendResponse(new GetStrongholdRewardResponse { Code = Invalid }, p.Id);
+            return;
+        }
+        List<RewardGoodsTable> goods = rows.SelectMany(row => RewardHandler.GetRewardGoods(row.RewardId)).ToList();
+        if (goods.Count == 0)
+        {
+            s.SendResponse(new GetStrongholdRewardResponse { Code = Invalid }, p.Id);
+            return;
+        }
+        RewardHandler.ApplyRewardsOnceAndPersist(
+            rows.Select(row => new RewardGrant($"stronghold:{s.player.PlayerData.Id}:achievement:{row.Id}", RewardHandler.GetRewardGoods(row.RewardId))).ToList(), s);
+        state.RewardIds.AddRange(ids);
+        state.RewardIds = state.RewardIds.Distinct().OrderBy(id => id).ToList();
+        state.ClaimedRewardIds.AddRange(ids);
+        state.ClaimedRewardIds = state.ClaimedRewardIds.Distinct().OrderBy(id => id).ToList();
+        Save(s);
+        s.SendResponse(new GetStrongholdRewardResponse
+        {
+            Code = 0,
+            SuccessIds = ids,
+            RewardGoodsList = goods.Select(g => new RewardGoods { Id = g.Id, TemplateId = g.TemplateId, Count = g.Count }).ToList()
+        }, p.Id);
+    }
     [RequestPacketHandler("SweepStrongholdStageRequest")]
     public static void Sweep(Session s, Packet.Request p)
     {
         SweepStrongholdStageRequest request = p.Deserialize<SweepStrongholdStageRequest>();
         StrongholdState state = State(s);
-        if (Next(state, request.GroupId) == 0 || state.Endurance <= 0)
+        StrongholdGroupStageData? stageData = state.GroupStageDatas.FirstOrDefault(group => group.Id == request.GroupId);
+        int next = Next(state, request.GroupId);
+        StrongholdGroupTable? group = Rows<StrongholdGroupTable>().FirstOrDefault(row => row.Id == request.GroupId);
+        bool prerequisiteFinished = group is not null && IsGroupUnlocked(state, request.GroupId) && CanSweep(state, group);
+        if (stageData is null || next == 0 || group is null || state.Endurance < group.Endurance || !prerequisiteFinished)
         {
-            s.SendResponse(new SweepStrongholdStageResponse { Code = 20113054 }, p.Id);
+            s.SendResponse(new SweepStrongholdStageResponse { Code = Invalid }, p.Id);
             return;
         }
-        state.PendingGroupId = request.GroupId;
-        state.PendingStageId = Next(state, request.GroupId);
-        StrongholdFightResult result = Settle(s.player, true, s);
+        StrongholdFightResult result = new();
+        do
+        {
+            state.PendingGroupId = request.GroupId;
+            state.PendingStageId = Next(state, request.GroupId);
+            result = Settle(s.player, true, s);
+            StrongholdGroupInfo? progress = state.GroupInfos.FirstOrDefault(value => value.Id == request.GroupId);
+            if (progress is not null)
+                s.SendPush(new NotifyUpdateStrongholdGroupData { GroupInfo = progress });
+            s.SendPush(new NotifyStrongholdTotalMineral { TotalMineral = state.TotalMineral });
+        }
+        while (!state.FinishGroupIds.Contains(request.GroupId) && Next(state, request.GroupId) > 0);
+        if (state.FinishGroupIds.Contains(request.GroupId))
+        {
+            s.SendPush(new NotifyStrongholdFinishGroupId
+            {
+                FinishGroupIds = state.FinishGroupIds.ToList(),
+                ElectricEnergy = state.ElectricEnergy,
+                FinishGroupInfos = state.FinishGroupInfos.ToList(),
+                HistoryFinishGroupInfos = state.HistoryFinishGroupInfos.ToList()
+            });
+            s.SendPush(new NotifyDeleteStrongholdGroupData { Id = request.GroupId });
+        }
+        s.SendPush(new NotifyStrongholdEnduranceData { Endurance = state.Endurance });
         s.SendResponse(new SweepStrongholdStageResponse { Code = 0, StrongholdFightResult = result }, p.Id);
     }
     [RequestPacketHandler("SelectStrongholdLevelRequest")]
