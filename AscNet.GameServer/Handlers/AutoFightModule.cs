@@ -14,10 +14,16 @@ namespace AscNet.GameServer.Handlers
     }
 
     [MessagePackObject(true)]
+    public class SweepReward
+    {
+        public List<RewardGoods> RewardGoods { get; set; } = [];
+    }
+
+    [MessagePackObject(true)]
     public class SweepResponse
     {
         public int Code { get; set; }
-        public List<List<RewardGoods>> SweepRewards { get; set; } = [];
+        public List<SweepReward> SweepRewards { get; set; } = [];
     }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
@@ -29,7 +35,7 @@ namespace AscNet.GameServer.Handlers
         {
             SweepRequest request = packet.Deserialize<SweepRequest>();
             if (!RepeatChallengeModule.IsStage((uint)request.StageId)
-                || !RepeatChallengeModule.TrySweep(session, request.Count, out List<List<RewardGoods>> rewards, out RewardApplicationResult? application))
+                || !RepeatChallengeModule.TrySweep(session, request.Count, out List<SweepReward> rewards, out RewardApplicationResult? application))
             {
                 session.SendResponse(new SweepResponse { Code = 1 }, packet.Id);
                 return;

@@ -182,7 +182,7 @@ namespace AscNet.GameServer.Handlers
             session.SendResponse(new RepeatChallengeRewardResponse { Code = 0, RewardGoodsList = application.RewardGoods }, packet.Id);
         }
 
-        public static bool TrySweep(Session session, int count, out List<List<RewardGoods>> rewards, out RewardApplicationResult? application)
+        public static bool TrySweep(Session session, int count, out List<SweepReward> rewards, out RewardApplicationResult? application)
         {
             rewards = [];
             application = null;
@@ -192,7 +192,7 @@ namespace AscNet.GameServer.Handlers
                 return false;
 
             Data data = Runtime.Value;
-            int actionPointCost = data.Stage.ActionPoint;
+            int actionPointCost = data.StageData.RequireActionPoint ?? 0;
             if (actionPointCost <= 0 || count > int.MaxValue / actionPointCost)
                 return false;
             int totalCost = actionPointCost * count;
@@ -202,7 +202,7 @@ namespace AscNet.GameServer.Handlers
 
             List<AscNet.Table.V2.share.reward.RewardGoodsTable> configured = RewardHandler.GetRewardGoods(data.StageData.FinishDropId ?? 0);
             configured.AddRange(RewardHandler.GetRewardGoods(ResolveLevelControl((int)session.player.PlayerData.Level).FinishDropId ?? 0));
-            if (configured.Count == 0)
+            if (configured.Count == 0 && !TryGetSettlementGoods((uint)data.Stage.Id, out configured))
                 return false;
             List<AscNet.Table.V2.share.reward.RewardGoodsTable> all = [];
             for (int i = 0; i < count; i++) all.AddRange(configured);
@@ -220,7 +220,7 @@ namespace AscNet.GameServer.Handlers
                 throw;
             }
             for (int i = 0; i < count; i++)
-                rewards.Add(application.RewardGoods.Skip(i * configured.Count).Take(configured.Count).ToList());
+                rewards.Add(new SweepReward { RewardGoods = application.RewardGoods.Skip(i * configured.Count).Take(configured.Count).ToList() });
             return true;
         }
 

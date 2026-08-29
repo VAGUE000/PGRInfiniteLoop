@@ -26421,6 +26421,29 @@ namespace AscNet.Test
             AssertEqual(0, repeatChallengeLogin.ExpInfo.Exp, "Simulated Battlefield initial Authority EXP");
             JObject repeatChallengeChapter = JObject.FromObject(repeatChallengeLogin.RcChapters.Single());
             AssertEqual(136_001, repeatChallengeChapter.Value<int>("Id"), "Simulated Battlefield repeat challenge ChapterId");
+            player.SimulatedBattlefield.RepeatChallengeCleared = true;
+            player.SimulatedBattlefield.RepeatChallengeLevel = 25;
+            inventory.Do(Inventory.ActionPoint, 60);
+            const int repeatSweepPacketId = 81_099;
+            InvokeRegisteredRequestHandler(
+                nameof(SweepRequest),
+                harness.Session,
+                repeatSweepPacketId,
+                new SweepRequest { StageId = 30_090_802, Count = 2 });
+            _ = harness.ReadPacket("Simulated Battlefield auto-clear reward push");
+            _ = harness.ReadPacket("Simulated Battlefield auto-clear EXP push");
+            SweepResponse repeatSweep = ReadResponsePayload<SweepResponse>(
+                harness.ReadPacket("Simulated Battlefield auto-clear response"),
+                nameof(SweepResponse));
+            AssertEqual(0, repeatSweep.Code, "Simulated Battlefield auto-clear code");
+            AssertEqual(2, repeatSweep.SweepRewards.Count, "Simulated Battlefield auto-clear reward batches");
+            AssertEqual(1, repeatSweep.SweepRewards[0].RewardGoods.Count,
+                "Simulated Battlefield auto-clear visible reward goods");
+            AssertEqual(0L, inventory.Items.Single(item => item.Id == Inventory.ActionPoint).Count,
+                "Simulated Battlefield auto-clear action-point cost");
+            player.SimulatedBattlefield.RepeatChallengeLevel = 1;
+            player.SimulatedBattlefield.RepeatChallengeExp = 0;
+            player.SimulatedBattlefield.RepeatChallengeCleared = false;
 
             const int joinPacketId = 81_001;
             InvokeRegisteredRequestHandler("JoinActivityRequest", harness.Session, joinPacketId, new Dictionary<string, object>());
