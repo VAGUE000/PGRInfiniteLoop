@@ -207,26 +207,34 @@ internal partial class Program
     {
         const long playerId = 48_107;
         CharacterGeneralSkillTable validGeneralSkill = TableReaderV2.Parse<CharacterGeneralSkillTable>()
-            .First(row => row.IsSkipSkillCheck == 0 && row.SkillId.Any(id => id > 0));
+            .First(row => row.FightEventId > 0 && row.FightEventId != 5000 + row.Id);
         int requiredSkillIndex = validGeneralSkill.SkillId.FindIndex(id => id > 0);
         int requiredSkillId = validGeneralSkill.SkillId[requiredSkillIndex];
         int requiredSkillLevel = validGeneralSkill.SkillLevel[requiredSkillIndex];
         CharacterSkillTable skillRow = TableReaderV2.Parse<CharacterSkillTable>()
             .First(row => row.SkillGroupId.Any(groupId =>
                 TableReaderV2.Parse<CharacterSkillGroupTable>().Find(group => group.Id == groupId)?.SkillId.Contains(requiredSkillId) == true));
-        int unownedGeneralSkill = TableReaderV2.Parse<CharacterGeneralSkillTable>()
+        CharacterGeneralSkillTable unownedGeneralSkillRow = TableReaderV2.Parse<CharacterGeneralSkillTable>()
             .First(row => row.Id != validGeneralSkill.Id
+                && row.FightEventId > 0
                 && row.IsSkipSkillCheck == 0
                 && row.SkillId.Any(id => id > 0)
-                && !row.SkillId.Contains(requiredSkillId)).Id;
-        int validEventId = (int)RequiredMethod(
+                && !row.SkillId.Contains(requiredSkillId));
+        int unownedGeneralSkill = unownedGeneralSkillRow.Id;
+        int validEventId = validGeneralSkill.FightEventId
+            ?? throw new InvalidDataException("Selected general skill has no fight event.");
+        int invalidEventId = unownedGeneralSkillRow.FightEventId
+            ?? throw new InvalidDataException("Unowned general skill has no fight event.");
+        MethodInfo mapGeneralSkillEvent = RequiredMethod(
             RequiredAscNetGameServerType("AscNet.GameServer.Handlers.FightModule"),
-            "GeneralSkillFightEventId", BindingFlags.Static | BindingFlags.NonPublic, [typeof(int)])
-            .Invoke(null, [validGeneralSkill.Id])!;
-        int invalidEventId = (int)RequiredMethod(
-            RequiredAscNetGameServerType("AscNet.GameServer.Handlers.FightModule"),
-            "GeneralSkillFightEventId", BindingFlags.Static | BindingFlags.NonPublic, [typeof(int)])
-            .Invoke(null, [unownedGeneralSkill])!;
+            "GeneralSkillFightEventId", BindingFlags.Static | BindingFlags.NonPublic, [typeof(int)]);
+        foreach (CharacterGeneralSkillTable generalSkill in TableReaderV2.Parse<CharacterGeneralSkillTable>()
+                     .Where(row => row.FightEventId > 0 && row.FightEventId != 5000 + row.Id))
+        {
+            AssertEqual(generalSkill.FightEventId!.Value,
+                (int)mapGeneralSkillEvent.Invoke(null, [generalSkill.Id])!,
+                $"GeneralSkill {generalSkill.Id} uses its authoritative fight event");
+        }
         RobotTable robot = TableReaderV2.Parse<RobotTable>().First();
         Character roster = CreateDrawCompatibilityCharacter(playerId);
         roster.Characters =

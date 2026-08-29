@@ -300,7 +300,6 @@ namespace AscNet.GameServer.Handlers
     {
         private const int TeamManagerSetTeamParaError = 20004003;
         private const int FightAuthorizationError = 1033;
-        private const int GeneralSkillFightEventOffset = 5000;
         private enum TeamPrefabValidationFailure
         {
             None,
@@ -2041,7 +2040,7 @@ namespace AscNet.GameServer.Handlers
         }
 
         internal static int GeneralSkillFightEventId(int generalSkillId) =>
-            GeneralSkillFightEventOffset + generalSkillId;
+            CharacterGeneralSkillRowsById.Value.GetValueOrDefault(generalSkillId)?.FightEventId ?? 0;
 
         private static bool IsValidCharacterSwitchSkill(CharacterData character, int skillId)
         {
