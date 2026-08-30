@@ -197,12 +197,20 @@ namespace AscNet.GameServer.Handlers
         private static readonly Lazy<List<BossSingleChallengeGradeTable>> ChallengeGrades = new(() =>
             TableReaderV2.Parse<BossSingleChallengeGradeTable>());
         private static readonly Lazy<List<BossSingleChallengeFeatureGroupTable>> ChallengeFeatureGroups = new(() =>
-            TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>()
+        {
+            List<BossSingleChallengeFeatureTable> features = TableReaderV2.Parse<BossSingleChallengeFeatureTable>();
+            List<BossSingleChallengeBuffGroupTable> buffs = TableReaderV2.Parse<BossSingleChallengeBuffGroupTable>();
+            return TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>()
                 .Where(row => row.FeatureIds.Count > 0
                     && row.FeatureIds.Count == row.BuffGroupIds.Count
-                    && row.BuffGroupIds.All(id => id > 0))
+                    // The client indexes these two columns by card position, then resolves each
+                    // BuffGroupId through its BuffGroupIndex table.
+                    && row.FeatureIds.Zip(row.BuffGroupIds).All(pair =>
+                        features.Any(feature => feature.Id == pair.First)
+                        && buffs.Any(buff => buff.BuffGroupId == pair.Second && buff.Index > 0)))
                 .OrderBy(row => row.Id)
-                .ToList());
+                .ToList();
+        });
         private static readonly Lazy<Dictionary<int, BossSingleStageTable>> Stages = new(() =>
             TableReaderV2.Parse<BossSingleStageTable>().ToDictionary(row => row.StageId));
         private static readonly Lazy<Dictionary<int, BossSingleScoreRuleTable>> ScoreRules = new(() =>
@@ -482,8 +490,14 @@ namespace AscNet.GameServer.Handlers
                 state.BossNormalStageTeams[sectionId] = characters.ToList();
                 session.player.Save();
             }
-            else if (stageType == 3 && !TryGetChallengeBuffGroup(request.BossSingleChallengeBuffGroup, session.player.SimulatedBattlefield, out int ignoredBuffGroup))
-                return false;
+            else if (stageType == 3)
+            {
+                int ignoredBuffGroup;
+                List<int> ignoredFeatureIds;
+                if (!TryGetChallengeBuffGroup(request.BossSingleChallengeBuffGroup,
+                    session.player.SimulatedBattlefield, out ignoredBuffGroup, out ignoredFeatureIds))
+                    return false;
+            }
             ApplyChallengeFeatureEvents(request, response.FightData, session.player.SimulatedBattlefield);
 
             session.PendingBossSingleScore = null;
@@ -539,9 +553,11 @@ namespace AscNet.GameServer.Handlers
                 ResolveScoreRule(stageId),
                 levelType,
                 DetermineStageStatus(session.player.SimulatedBattlefield, stageId, characters));
-            int buffGroup = 0;
+            int pendingBuffGroup;
+            List<int> pendingFeatureIds;
             _ = TryGetChallengeBuffGroup(fight.PreFight.PreFightData.BossSingleChallengeBuffGroup,
-                session.player.SimulatedBattlefield, out buffGroup);
+                session.player.SimulatedBattlefield, out pendingBuffGroup, out pendingFeatureIds);
+            int buffGroup = pendingBuffGroup;
             session.PendingBossSingleScore = new BossSinglePendingScore
             {
                 StageId = stageId,
@@ -605,7 +621,13 @@ namespace AscNet.GameServer.Handlers
                         {
                             StageId = record.StageId, Score = record.Score,
                             Characters = record.Characters.ToList(), Partners = record.Partners.ToList(),
-                            BuffGroup = record.BuffGroup
+                            BuffGroup = record.BuffGroup > 0
+                                ? new Dictionary<string, object>
+                                {
+                                    ["BuffGroupId"] = record.BuffGroup,
+                                    ["BuffChoices"] = new Dictionary<int, int>()
+                                }
+                                : null
                         }).ToList(),
                     ChallengeDeleteRecordTime = checked((int)state.BossChallengeDeleteRecordTime),
                     IsResetOpen = true,
@@ -684,27 +706,90 @@ namespace AscNet.GameServer.Handlers
             return state.BossChallengeHistory.OrderByDescending(record => record.Score).Take(take).Sum(record => record.Score);
         }
 
-        private static bool TryGetChallengeBuffGroup(dynamic? value, SimulatedBattlefieldState state, out int buffGroup)
+        private static bool TryGetChallengeBuffGroup(
+            object? value,
+            SimulatedBattlefieldState state,
+            out int buffGroup,
+            out List<int> featureIds)
         {
             buffGroup = 0;
+            featureIds = [];
             if (value is null) return false;
-            try
-            {
-                object? raw = value is int direct ? direct
-                    : value is IDictionary<string, object> strings
-                        ? strings.FirstOrDefault(entry => string.Equals(entry.Key, "BuffGroup", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(entry.Key, "BuffGroupId", StringComparison.OrdinalIgnoreCase)).Value
-                        : value is IDictionary<object, object> map
-                            ? map.FirstOrDefault(entry => string.Equals(Convert.ToString(entry.Key), "BuffGroup", StringComparison.OrdinalIgnoreCase)
-                                || string.Equals(Convert.ToString(entry.Key), "BuffGroupId", StringComparison.OrdinalIgnoreCase)).Value
-                            : null;
-                buffGroup = Convert.ToInt32(raw, CultureInfo.InvariantCulture);
-            }
+
+            object? raw = value is int direct ? direct
+                : value is IDictionary<string, object> strings
+                    ? strings.FirstOrDefault(entry => string.Equals(entry.Key, "BuffGroup", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(entry.Key, "BuffGroupId", StringComparison.OrdinalIgnoreCase)).Value
+                    : value is IDictionary<object, object> map
+                        ? map.FirstOrDefault(entry => string.Equals(Convert.ToString(entry.Key), "BuffGroup", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(Convert.ToString(entry.Key), "BuffGroupId", StringComparison.OrdinalIgnoreCase)).Value
+                        : null;
+            try { buffGroup = Convert.ToInt32(raw, CultureInfo.InvariantCulture); }
             catch { return false; }
+
             var challenge = ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
             if (challenge is null || challenge.Value.FeatureGroupId <= 0) return false;
-            BossSingleChallengeFeatureGroupTable group = ChallengeFeatureGroups.Value.SingleOrDefault(row => row.Id == challenge.Value.FeatureGroupId)!;
-            return group is not null && group.BuffGroupIds.Contains(buffGroup);
+            BossSingleChallengeFeatureGroupTable? group = ChallengeFeatureGroups.Value
+                .SingleOrDefault(row => row.Id == challenge.Value.FeatureGroupId);
+            int pairingIndex = group?.BuffGroupIds.IndexOf(buffGroup) ?? -1;
+            if (group is null || pairingIndex < 0 || pairingIndex >= group.FeatureIds.Count)
+                return false;
+            featureIds.Add(group.FeatureIds[pairingIndex]);
+
+            object? choices = value switch
+            {
+                IDictionary<string, object> stringChoices => stringChoices.FirstOrDefault(entry =>
+                    string.Equals(entry.Key, "BuffChoices", StringComparison.OrdinalIgnoreCase)).Value,
+                IDictionary<object, object> objectChoices => objectChoices.FirstOrDefault(entry =>
+                    string.Equals(Convert.ToString(entry.Key), "BuffChoices", StringComparison.OrdinalIgnoreCase)).Value,
+                _ => null
+            };
+            if (choices is null) return true;
+            if (choices is not IDictionary<object, object>
+                && choices is not IDictionary<string, object>)
+                return false;
+            IEnumerable<KeyValuePair<object, object>> choiceEntries = choices switch
+            {
+                IDictionary<object, object> objectChoiceEntries => objectChoiceEntries,
+                IDictionary<string, object> stringChoiceEntries => stringChoiceEntries
+                    .Select(entry => new KeyValuePair<object, object>(entry.Key, entry.Value)),
+                _ => []
+            };
+            int selectedBuffGroup = buffGroup;
+            List<BossSingleChallengeBuffGroupTable> buffRows = TableReaderV2
+                .Parse<BossSingleChallengeBuffGroupTable>()
+                .Where(row => row.BuffGroupId == selectedBuffGroup)
+                .ToList();
+            foreach ((object key, object selectedIndexValue) in choiceEntries)
+            {
+                if (!int.TryParse(Convert.ToString(key, CultureInfo.InvariantCulture), out int index)
+                    || !int.TryParse(Convert.ToString(selectedIndexValue, CultureInfo.InvariantCulture), out int selectedIndex))
+                    return false;
+                BossSingleChallengeBuffGroupTable? row = buffRows.SingleOrDefault(candidate => candidate.Index == index);
+                if (row is null || selectedIndex <= 0 || selectedIndex > row.Buff.Count)
+                    return false;
+                int selectedFeatureId = row.Buff[selectedIndex - 1];
+                if (selectedFeatureId <= 0) return false;
+                featureIds.Add(selectedFeatureId);
+            }
+            return true;
+        }
+
+        private static void ApplyChallengeFeatureEvents(
+            PreFightRequest.PreFightRequestPreFightData request,
+            PreFightResponse.PreFightResponseFightData fightData,
+            SimulatedBattlefieldState state)
+        {
+            if (request.BossSingleStageType != 3) return;
+            if (!TryGetChallengeBuffGroup(request.BossSingleChallengeBuffGroup, state,
+                out int selectedBuffGroup, out List<int> featureIds))
+                return;
+            foreach (int featureId in featureIds)
+            {
+                BossSingleChallengeFeatureTable? feature = TableReaderV2.Parse<BossSingleChallengeFeatureTable>()
+                    .FirstOrDefault(row => row.Id == featureId);
+                if (feature?.FightEventIds > 0) fightData.EventIds.Add(feature.FightEventIds);
+            }
         }
 
         internal static NotifyBossActivityData? BuildActivityLoginData(Session session, DateTimeOffset? now = null)
@@ -768,23 +853,6 @@ namespace AscNet.GameServer.Handlers
                     .Where(stageId => persistedStages.TryGetValue(stageId, out _))
                     .ToDictionary(stageId => stageId, stageId => checked((int)persistedStages[stageId].Score))
             };
-        }
-        private static void ApplyChallengeFeatureEvents(
-            PreFightRequest.PreFightRequestPreFightData request,
-            PreFightResponse.PreFightResponseFightData fightData,
-            SimulatedBattlefieldState state)
-        {
-            if (request.BossSingleStageType != 3) return;
-            var challenge = ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
-            if (challenge is null) return;
-            BossSingleChallengeFeatureGroupTable? group = ChallengeFeatureGroups.Value.SingleOrDefault(row => row.Id == challenge.Value.FeatureGroupId);
-            if (group is null) return;
-            foreach (int featureId in group.FeatureIds)
-            {
-                BossSingleChallengeFeatureTable? feature = TableReaderV2.Parse<BossSingleChallengeFeatureTable>().FirstOrDefault(row => row.Id == featureId);
-                if (feature is null) continue;
-                if (feature.FightEventIds > 0) fightData.EventIds.Add(feature.FightEventIds);
-            }
         }
 
         internal static void PrepareLogin(Session session)

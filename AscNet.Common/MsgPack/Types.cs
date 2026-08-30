@@ -1736,7 +1736,7 @@ public sealed class NotifyBfrtProgressInfo
             public Int32 Score { get; set; }
             public List<Int32> Characters { get; set; } = new();
             public List<Int32> Partners { get; set; } = new();
-            public Int32 BuffGroup { get; set; }
+            public dynamic? BuffGroup { get; set; }
         }
 
         [global::MessagePack.MessagePackObject(true)]

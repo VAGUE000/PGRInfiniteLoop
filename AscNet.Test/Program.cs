@@ -28047,6 +28047,13 @@ namespace AscNet.Test
             int challengeBuffGroup = challengeGroups.Single(row => row.Id == challengeLogin.FubenBossSingleData.ChallengeFeatureGroupId).BuffGroupIds.First(id => id > 0);
             PreFightResponse intensivePreFight = StartFight(82_030, challengeStageId, stageType: 3, buffGroup: challengeBuffGroup);
             AssertEqual(0, intensivePreFight.Code, "Pain Cage intensive type3 pre-fight");
+            int challengeFeatureEvent = TableReaderV2.Parse<BossSingleChallengeFeatureTable>()
+                .Single(row => row.Id == challengeFeatureGroup.FeatureIds[
+                    challengeFeatureGroup.BuffGroupIds.IndexOf(challengeBuffGroup)])
+                .FightEventIds;
+            AssertEqual(true, challengeFeatureEvent <= 0
+                || intensivePreFight.FightData.EventIds.Contains(challengeFeatureEvent),
+                "Pain Cage intensive module applies its table-derived fight event");
             BossSingleStageTable intensiveStage = stages.Single(row => row.StageId == challengeStageId);
             FightSettleResponse intensiveSettle = SettleFight(82_031, intensivePreFight, intensiveStage, 100, 0, fightSeconds: 8);
             BossSingleFightResult intensiveResult = RequiredBossResult(intensiveSettle, "Pain Cage intensive result");
@@ -28054,6 +28061,10 @@ namespace AscNet.Test
             AssertEqual(0, intensiveSave.Code, "Pain Cage intensive save");
             AssertEqual(true, intensivePushes.Contains(nameof(NotifyBossSingleRankInfo)), "Pain Cage intensive rank push");
             AssertEqual(intensiveResult.TotalScore, player.SimulatedBattlefield.BossChallengeHistory.Single(row => row.StageId == challengeStageId).Score, "Pain Cage intensive history");
+            dynamic intensiveHistoryBuffGroup = BuildLogin(player, null).FubenBossSingleData
+                .ChallengeStageHistoryList.Single(row => row.StageId == challengeStageId).BuffGroup;
+            AssertEqual(challengeBuffGroup, (int)intensiveHistoryBuffGroup["BuffGroupId"],
+                "Pain Cage intensive history emits the client BuffGroup object");
             player.SimulatedBattlefield.BossChallengeHistory.Add(new AscNet.Common.Database.BossSingleChallengeHistoryRecordState { StageId = challengeStageId + 1, Score = intensiveResult.TotalScore + 1 });
             player.SimulatedBattlefield.BossChallengeHistory.Add(new AscNet.Common.Database.BossSingleChallengeHistoryRecordState { StageId = challengeStageId + 2, Score = intensiveResult.TotalScore - 1 });
             AssertEqual(intensiveResult.TotalScore + intensiveResult.TotalScore + 1, BuildLogin(player, null).FubenBossSingleData.ChallengeTotalScore, "Pain Cage intensive top-two total");
