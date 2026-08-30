@@ -28030,7 +28030,20 @@ namespace AscNet.Test
             ];
             player.SimulatedBattlefield.BossChallengeSelectedFeatureGroup = challengeGroups.First(row => row.BuffGroupIds.Any(id => id > 0)).Id;
             NotifyFubenBossSingleData challengeLogin = BuildLogin(player, null);
-            int challengeStageId = sections.Where(row => row.SectionId == challengeLogin.FubenBossSingleData.ChallengeSectionId).OrderByDescending(row => row.AfreshId).First().StageId.First();
+            BossSingleSectionTable challengeSection = sections
+                .Single(row => row.Id == challengeLogin.FubenBossSingleData.ChallengeSectionId
+                    && row.AfreshId == sections.Max(section => section.AfreshId));
+            int challengeStageId = challengeSection.StageId.First();
+            BossSingleChallengeFeatureGroupTable challengeFeatureGroup = challengeGroups
+                .Single(row => row.Id == challengeLogin.FubenBossSingleData.ChallengeFeatureGroupId);
+            AssertEqual(3, challengeSection.StageId.Count,
+                "Pain Cage intensive current section has three stages");
+            AssertEqual(3, challengeFeatureGroup.FeatureIds.Count,
+                "Pain Cage intensive feature group has three affixes");
+            AssertEqual(true, challengeSection.StageId.Zip(challengeFeatureGroup.FeatureIds).All(pair =>
+                    challengeSection.StageId.Contains(pair.First)
+                    && challengeFeatureGroup.FeatureIds.Contains(pair.Second)),
+                "Pain Cage intensive stage and affix join preserves table order");
             int challengeBuffGroup = challengeGroups.Single(row => row.Id == challengeLogin.FubenBossSingleData.ChallengeFeatureGroupId).BuffGroupIds.First(id => id > 0);
             PreFightResponse intensivePreFight = StartFight(82_030, challengeStageId, stageType: 3, buffGroup: challengeBuffGroup);
             AssertEqual(0, intensivePreFight.Code, "Pain Cage intensive type3 pre-fight");
@@ -28720,13 +28733,17 @@ namespace AscNet.Test
                 "Pain Cage normal total score unlocks table-backed intensive level");
             AssertEqual(challengeGrade.NeedScore, eligibleChallengeLogin.FubenBossSingleData.TotalScore,
                 "Pain Cage login repairs total score from persisted stage bests");
-            AssertEqual(true, TableReaderV2.Parse<BossSingleGroupTable>()
-                    .Single(row => row.Id == challengeGrade.BossGroupId)
-                    .SectionId.Contains(eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId),
-                "Pain Cage intensive section belongs to its challenge grade group");
-            AssertEqual(true, TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>()
-                    .Any(row => row.Id == eligibleChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId),
-                "Pain Cage intensive feature group is authoritative");
+            AssertEqual(challengeNormalGrade.RewardGroupId,
+                grades.Single(row => row.LevelType == player.SimulatedBattlefield.BossLevelType).RewardGroupId,
+                "Pain Cage intensive rank rewards share the selected normal reward group");
+            BossSingleSectionTable eligibleChallengeSection = sections.Single(row =>
+                row.Id == eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId
+                && row.AfreshId == sections.Max(section => section.AfreshId));
+            BossSingleChallengeFeatureGroupTable eligibleChallengeFeatureGroup = challengeGroups.Single(row =>
+                row.Id == eligibleChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId);
+            AssertEqual(true, eligibleChallengeSection.StageId.Count > 0
+                && eligibleChallengeFeatureGroup.FeatureIds.Count > 0,
+                "Pain Cage intensive PK section and feature joins are nonempty");
             AssertEqual(0, eligibleChallengeLogin.FubenBossSingleData.ChallengeTotalScore,
                 "Pain Cage intensive score does not reuse normal total score");
             NotifyFubenBossSingleData repeatedChallengeLogin = BuildLogin(player, null);
@@ -28738,8 +28755,8 @@ namespace AscNet.Test
                 "Pain Cage intensive feature group is stable within an activity");
 
             int ultimateStageId = sections
-                .Where(row => row.SectionId == eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId
-                    && row.AfreshId == 1)
+                .Where(row => row.Id == eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId
+                    && row.AfreshId == sections.Max(section => section.AfreshId))
                 .SelectMany(row => row.StageId)
                 .First(stageId => stages.Any(row => row.StageId == stageId
                     && row.PassTimeLimit == 300

@@ -649,7 +649,10 @@ namespace AscNet.GameServer.Handlers
                 || !Groups.Value.TryGetValue(challengeGrade.BossGroupId, out BossSingleGroupTable? group))
                 return null;
 
-            List<int> sections = group.SectionId.Where(HasCurrentSection).ToList();
+            List<(int LogicalId, int TableId)> sections = group.SectionId
+                .Where(HasCurrentSection)
+                .Select(logicalId => (logicalId, ResolveSection(logicalId).Id))
+                .ToList();
             if (sections.Count == 0 || ChallengeFeatureGroups.Value.Count == 0)
                 return null;
 
@@ -657,13 +660,16 @@ namespace AscNet.GameServer.Handlers
                 $"{state.BossActivityNo}:{challengeGrade.LevelType}:{challengeGrade.BossGroupId}") % (uint)sections.Count));
             int featureIndex = checked((int)(StableHash(
                 $"{state.BossActivityNo}:{challengeGrade.LevelType}:feature") % (uint)ChallengeFeatureGroups.Value.Count));
-            int sectionId = sections.Contains(state.BossChallengeSelectedSection)
-                ? state.BossChallengeSelectedSection : sections[sectionIndex];
+            (int LogicalId, int TableId) selectedSection = sections.FirstOrDefault(candidate =>
+                candidate.TableId == state.BossChallengeSelectedSection
+                || candidate.LogicalId == state.BossChallengeSelectedSection);
+            if (selectedSection == default)
+                selectedSection = sections[sectionIndex];
             int featureGroupId = ChallengeFeatureGroups.Value.Any(row => row.Id == state.BossChallengeSelectedFeatureGroup)
                 ? state.BossChallengeSelectedFeatureGroup : ChallengeFeatureGroups.Value[featureIndex].Id;
-            state.BossChallengeSelectedSection = sectionId;
+            state.BossChallengeSelectedSection = selectedSection.TableId;
             state.BossChallengeSelectedFeatureGroup = featureGroupId;
-            return (challengeGrade.LevelType, sectionId, featureGroupId);
+            return (challengeGrade.LevelType, selectedSection.TableId, featureGroupId);
         }
  
         private static int ChallengeTotal(SimulatedBattlefieldState state, int levelType)
@@ -1235,7 +1241,7 @@ namespace AscNet.GameServer.Handlers
             {
                 var challenge = ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
                 if (challenge is not null && challenge.Value.LevelType == 9
-                    && ResolveSection(challenge.Value.SectionId, false).StageId.Contains(stageId))
+                    && ResolveChallengeSection(challenge.Value.SectionId).StageId.Contains(stageId))
                 {
                     sectionId = challenge.Value.SectionId;
                     return true;
@@ -1299,6 +1305,11 @@ namespace AscNet.GameServer.Handlers
             }
             throw new InvalidDataException($"No Pain Cage section {sectionId} for AfreshId {CurrentAfreshId}.");
         }
+        private static BossSingleSectionTable ResolveChallengeSection(int tableId) =>
+            Sections.Value.FirstOrDefault(row =>
+                row.Id == tableId && row.AfreshId == CurrentAfreshId)
+            ?? throw new InvalidDataException($"No Pain Cage challenge section table row {tableId} for AfreshId {CurrentAfreshId}.");
+
 
         private static bool HasCurrentSection(int sectionId) => Sections.Value.Any(row =>
             row.SectionId == sectionId && row.AfreshId == CurrentAfreshId);
