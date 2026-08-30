@@ -27674,10 +27674,10 @@ namespace AscNet.Test
                 BossSingleStageTable stage,
                 int characterHp,
                 int bossHp,
+                int fightSeconds = 20,
                 bool isWin = true,
                 bool isForceExit = false)
             {
-                int fightSeconds = 20;
                 InvokeRegisteredRequestHandler(
                     nameof(FightSettleRequest),
                     harness.Session,
@@ -27948,7 +27948,8 @@ namespace AscNet.Test
                     .First(stageId => stages.Any(row => row.StageId == stageId));
             }
 
-            void ExerciseAuxiliaryStage(bool bestiary, int stageType, int packetBase)
+            List<(int Remaining, int Score, int Cap)> auxiliaryTimeScores = [];
+            void ExerciseAuxiliaryStage(bool bestiary, int stageType, int fightSeconds, int packetBase)
             {
                 int stageId = AuxiliaryStageId(bestiary);
                 BossSingleStageTable stage = stages.Single(row => row.StageId == stageId);
@@ -27957,10 +27958,29 @@ namespace AscNet.Test
                 AssertEqual(0, preFight.Code, $"Pain Cage {(bestiary ? "bestiary" : "trial")} pre-fight code");
                 AssertEqual(stage.PassTimeLimit, preFight.FightData.PassTimeLimit,
                     $"Pain Cage {(bestiary ? "bestiary" : "trial")} table time limit");
-                FightSettleResponse settle = SettleFight(packetBase + 1, preFight, stage, 100, 0);
+                FightSettleResponse settle = SettleFight(
+                    packetBase + 1,
+                    preFight,
+                    stage,
+                    characterHp: 100,
+                    bossHp: 0,
+                    fightSeconds: fightSeconds);
                 BossSingleFightResult result = RequiredBossResult(
                     settle,
                     $"Pain Cage {(bestiary ? "bestiary" : "trial")} result");
+                AssertEqual(stage.PassTimeLimit - fightSeconds, result.TimeLeft,
+                    $"Pain Cage {(bestiary ? "bestiary" : "trial")} remaining time");
+                BossSingleScoreRuleTable scoreRule = scoreRules.Single(row => row.Id == stageId);
+                int coefficientIndex = (stageType == 4 ? 8 : 4) - 1;
+                double timeCoefficient = double.Parse(
+                    scoreRule.LeftTimeScore[coefficientIndex], CultureInfo.InvariantCulture);
+                int expectedTimeScore = Math.Min(stage.LeftTimeScore, checked((int)Math.Floor(
+                    (stage.PassTimeLimit - fightSeconds) * timeCoefficient)));
+                AssertEqual(expectedTimeScore, result.TimeScore,
+                    $"Pain Cage {(bestiary ? "bestiary" : "trial")} table-derived remaining-time score");
+                auxiliaryTimeScores.Add((result.TimeLeft, result.TimeScore, result.MaxTimeScore));
+                AssertEqual(true, result.TimeScore > 0 && result.TimeScore <= result.MaxTimeScore,
+                    $"Pain Cage {(bestiary ? "bestiary" : "trial")} remaining-time score is positive and capped");
                 AssertEqual(true, result.TotalScore > 0,
                     $"Pain Cage {(bestiary ? "bestiary" : "trial")} positive score");
                 BossSingleSaveScoreResponse save = SaveScore(
@@ -27978,8 +27998,14 @@ namespace AscNet.Test
                     $"Pain Cage {(bestiary ? "bestiary" : "trial")} does not consume normal attempts");
             }
 
-            ExerciseAuxiliaryStage(bestiary: false, stageType: 2, packetBase: 82_010);
-            ExerciseAuxiliaryStage(bestiary: true, stageType: 4, packetBase: 82_020);
+            ExerciseAuxiliaryStage(bestiary: false, stageType: 2, fightSeconds: 100, packetBase: 82_010);
+            ExerciseAuxiliaryStage(bestiary: true, stageType: 4, fightSeconds: 12, packetBase: 82_020);
+            AssertEqual(true, auxiliaryTimeScores[0].Score < auxiliaryTimeScores[0].Cap
+                && auxiliaryTimeScores[1].Score < auxiliaryTimeScores[1].Cap,
+                "Pain Cage partial remaining-time scores are below their caps");
+            AssertEqual(true, auxiliaryTimeScores[0].Score != auxiliaryTimeScores[1].Score,
+                "Pain Cage remaining-time scores vary proportionally with distinct durations");
+
 
             List<int> selectedStageIds = selectedSections
                 .SelectMany(sectionId => sections.Single(row => row.SectionId == sectionId && row.AfreshId == 1).StageId)
@@ -28254,15 +28280,8 @@ namespace AscNet.Test
             double timeCoefficient = double.Parse(
                 normalRule.LeftTimeScore[coefficientIndex],
                 CultureInfo.InvariantCulture);
-            int expectedTimeScore = timeCoefficient <= 1
-                ? checked((int)Math.Floor(normalStage.LeftTimeScore
-                    * Math.Clamp(
-                        ((normalStage.PassTimeLimit - 20d) / normalStage.PassTimeLimit
-                            - (1d - timeCoefficient)) / timeCoefficient,
-                        0d,
-                        1d)))
-                : Math.Min(normalStage.LeftTimeScore,
-                    checked((int)Math.Floor((normalStage.PassTimeLimit - 20) * timeCoefficient)));
+            int expectedTimeScore = Math.Min(normalStage.LeftTimeScore,
+                checked((int)Math.Floor((normalStage.PassTimeLimit - 20) * timeCoefficient)));
             double hpCoefficient = double.Parse(
                 normalRule.CharLeftHpSocre[coefficientIndex],
                 CultureInfo.InvariantCulture);
@@ -28511,6 +28530,13 @@ namespace AscNet.Test
             AssertEqual(1, duplicateAuto.Code, "Pain Cage duplicate auto-fight rejected");
             AssertEqual(1, player.SimulatedBattlefield.BossAutoFightCount,
                 "Pain Cage duplicate auto-fight does not consume quota");
+
+            player.SimulatedBattlefield.BossTotalScore = Math.Max(
+                player.SimulatedBattlefield.BossTotalScore,
+                scoreRewards
+                    .Where(row => row.LevelType == selectedLevel
+                        && row.RewardGroupId == selectedGrade.RewardGroupId)
+                    .Min(row => row.Score));
 
             const int allRewardPacketId = 82_041;
             InvokeRegisteredRequestHandler(

@@ -879,11 +879,8 @@ namespace AscNet.GameServer.Handlers
             int bossScore = ScoreBySteps(bossLostRatio, bossStep, bossPoints, stage.BossLoseHpScore);
             int passTime = Math.Max(1, stage.PassTimeLimit);
             int timeLeft = Math.Clamp(checked((int)settle.LeftTime), 0, passTime);
-            double timeRatio = timeLeft / (double)passTime;
-            int timeScore = timeCoefficient > 0 && timeCoefficient <= 1
-                ? checked((int)Math.Floor(stage.LeftTimeScore
-                    * Math.Clamp((timeRatio - (1d - timeCoefficient)) / timeCoefficient, 0d, 1d)))
-                : Math.Min(stage.LeftTimeScore, checked((int)Math.Floor(timeLeft * timeCoefficient)));
+            int timeScore = Math.Min(stage.LeftTimeScore,
+                checked((int)Math.Floor(timeLeft * timeCoefficient)));
 
             List<double> characterHp = settle.NpcHpInfo?.Values
                 .Where(npc => npc.Type == 1)
