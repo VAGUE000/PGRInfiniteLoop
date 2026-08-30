@@ -726,7 +726,7 @@ namespace AscNet.GameServer.Handlers
                 : null;
             if (character is null || defaultSkillId <= 0
                 || initialUpgrade is not null
-                    && !Character.MeetsCharacterSkillCondition(character, initialUpgrade.ConditionId))
+                    && !Character.MeetsCharacterSkillCondition(character, initialUpgrade.ConditionId, session.player.PlayerData.Level))
             {
                 session.SendResponse(new CharacterUnlockSkillGroupResponse { Code = 20009021 }, packet.Id);
                 return;
@@ -851,7 +851,7 @@ namespace AscNet.GameServer.Handlers
             // Unlock exactly the table-defined default active skill (one active per enhance group).
             List<EnhanceSkillUpgradeTable> defaultRows = Character.OrderedEnhanceSkillUpgrades(defaultSkillId);
             if (defaultRows.Count == 0
-                || !Character.MeetsCharacterSkillCondition(character, defaultRows[0].ConditionId))
+                || !Character.MeetsCharacterSkillCondition(character, defaultRows[0].ConditionId, session.player.PlayerData.Level))
             {
                 // CharacterSkillConditionNotMet
                 session.SendResponse(new CharacterUnlockEnhanceSkillResponse() { Code = 20009021 }, packet.Id);
@@ -938,7 +938,7 @@ namespace AscNet.GameServer.Handlers
                     session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20009014 }, packet.Id);
                     return;
                 }
-                if (!Character.MeetsCharacterSkillCondition(character, upgrade.ConditionId))
+                if (!Character.MeetsCharacterSkillCondition(character, upgrade.ConditionId, session.player.PlayerData.Level))
                 {
                     // CharacterSkillConditionNotMet
                     session.SendResponse(new CharacterUpgradeEnhanceSkillResponse() { Code = 20009021 }, packet.Id);

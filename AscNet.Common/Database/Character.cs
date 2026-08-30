@@ -1208,55 +1208,94 @@ namespace AscNet.Common.Database
             };
         }
 
-        public static bool MeetsCharacterSkillCondition(CharacterData character, IReadOnlyList<int>? conditionIds)
+        public static bool MeetsCharacterSkillCondition(CharacterData character, IReadOnlyList<int>? conditionIds, long? playerLevel = null)
         {
             if (conditionIds is null || conditionIds.Count == 0)
                 return true;
 
-            foreach (int conditionId in conditionIds)
+            Dictionary<int, ConditionTable> conditions = TableReaderV2.Parse<ConditionTable>()
+                .ToDictionary(condition => condition.Id);
+            return conditionIds.Where(id => id > 0)
+                .All(id => MeetsCharacterSkillCondition(character, playerLevel, id, conditions, 0));
+        }
+
+        private static bool MeetsCharacterSkillCondition(CharacterData character, long? playerLevel, int conditionId,
+            IReadOnlyDictionary<int, ConditionTable> conditions, int depth)
+        {
+            if (depth > 32 || !conditions.TryGetValue(conditionId, out ConditionTable? condition))
+                return false;
+            if (!string.IsNullOrWhiteSpace(condition.Formula))
             {
-                if (conditionId <= 0)
-                    continue;
-                ConditionTable? condition = TableReaderV2.Parse<ConditionTable>()
-                    .FirstOrDefault(candidate => candidate.Id == conditionId);
-                if (condition is null || condition.Params.Count == 0)
-                    return false;
-                if (condition.Type == 11102)
-                {
-                    // The requested character's liberation stage >= Params[1].
-                    if (condition.Params.Count < 2
-                        || character.Id != (uint)condition.Params[0]
-                        || character.LiberateLv < condition.Params[1])
-                    {
-                        return false;
-                    }
-                }
-                else if (condition.Type == 13103)
-                {
-                    // Character level >= Params[0].
-                    if (character.Level < condition.Params[0])
-                        return false;
-                }
-                else if (condition.Type == 13105)
-                {
-                    // Character quality >= Params[0]; when Params[2] (star) is set, require star >= it
-                    // at the exact quality tier (mirrors client Condition 13105).
-                    int requiredQuality = condition.Params[0];
-                    int requiredStar = condition.Params.Count > 2 ? condition.Params[2] : 0;
-                    bool meetsQuality = requiredStar > 0
-                        ? character.Quality > requiredQuality
-                            || (character.Quality == requiredQuality && character.Star >= requiredStar)
-                        : character.Quality >= requiredQuality;
-                    if (!meetsQuality)
-                        return false;
-                }
-                else
-                {
-                    // Unknown condition type: treat as closed rather than granting progression.
-                    return false;
-                }
+                int position = 0;
+                return ParseConditionOr(condition.Formula, ref position, character, playerLevel, conditions, depth + 1)
+                    && position == condition.Formula.Length;
             }
-            return true;
+            if (condition.Params.Count == 0)
+                return false;
+
+            return condition.Type switch
+            {
+                11102 => condition.Params.Count >= 2
+                    && character.Id == (uint)condition.Params[0]
+                    && character.LiberateLv >= condition.Params[1],
+                13103 => character.Level >= condition.Params[0],
+                10101 => playerLevel is not null && playerLevel >= condition.Params[0],
+                13105 => character.Quality > condition.Params[0]
+                    || character.Quality == condition.Params[0]
+                    && (condition.Params.Count <= 2 || character.Star >= condition.Params[2]),
+                13116 => condition.Params.Count >= 2
+                    && character.EnhanceSkillList.Any(skill =>
+                        skill.Id == (uint)condition.Params[0] && skill.Level >= condition.Params[1]),
+                _ => false
+            };
+        }
+
+        private static bool ParseConditionOr(string formula, ref int position, CharacterData character, long? playerLevel,
+            IReadOnlyDictionary<int, ConditionTable> conditions, int depth)
+        {
+            bool result = ParseConditionAnd(formula, ref position, character, playerLevel, conditions, depth);
+            while (position < formula.Length && formula[position] == '|')
+            {
+                position++;
+                bool right = ParseConditionAnd(formula, ref position, character, playerLevel, conditions, depth);
+                result |= right;
+            }
+            return result;
+        }
+
+        private static bool ParseConditionAnd(string formula, ref int position, CharacterData character, long? playerLevel,
+            IReadOnlyDictionary<int, ConditionTable> conditions, int depth)
+        {
+            bool result = ParseConditionPrimary(formula, ref position, character, playerLevel, conditions, depth);
+            while (position < formula.Length && formula[position] == '&')
+            {
+                position++;
+                bool right = ParseConditionPrimary(formula, ref position, character, playerLevel, conditions, depth);
+                result &= right;
+            }
+            return result;
+        }
+
+        private static bool ParseConditionPrimary(string formula, ref int position, CharacterData character, long? playerLevel,
+            IReadOnlyDictionary<int, ConditionTable> conditions, int depth)
+        {
+            while (position < formula.Length && char.IsWhiteSpace(formula[position]))
+                position++;
+            if (position < formula.Length && formula[position] == '(')
+            {
+                position++;
+                bool result = ParseConditionOr(formula, ref position, character, playerLevel, conditions, depth);
+                if (position >= formula.Length || formula[position++] != ')')
+                    return false;
+                return result;
+            }
+
+            int id = 0;
+            int start = position;
+            while (position < formula.Length && char.IsAsciiDigit(formula[position]))
+                id = checked(id * 10 + formula[position++] - '0');
+            return position > start
+                && MeetsCharacterSkillCondition(character, playerLevel, id, conditions, depth);
         }
 
         public EquipData? AddEquip(uint equipId, int characterId = 0, int level = 1)

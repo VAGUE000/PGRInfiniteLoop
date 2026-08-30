@@ -736,6 +736,98 @@ internal partial class Program
             AssertEqual(1, unlockInventorySaves.ReplaceOneCalls, "Pyroath unlock saves inventory once");
         }
 
+        // Uniframe unlock gates use Commandant level (Condition 10101), not Construct level.
+        const int uniframeCharacterId = 1511003;
+        const int uniframeGroupId = 1513280;
+        const int uniframeSkillId = 151328;
+        Dictionary<int, int> uniframeCosts = CostOfLevel(uniframeSkillId, 0, "Uniframe unlock level 0");
+        AscNet.Common.Database.Character uniframeRoster = CreateTestCharacterRoster(uniframeCharacterId, level: 80);
+        uniframeRoster.Uid = 48_109;
+        Player uniframePlayer = CreateDrawCompatibilityPlayer(uniframeRoster.Uid);
+        uniframePlayer.PlayerData.Level = 52;
+        using (MongoCollectionOverride mongo = MongoCollectionOverride.InstallForDailySignInCompatibility(
+            out _, out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> uniframeSaves, out _))
+        using (LoopbackSessionHarness harness = new(uniframeRoster, uniframePlayer,
+            CreateInventory(uniframeRoster.Uid, InitialCounts(uniframeCosts, surplus: 10)), "v47-uniframe-unlock"))
+        {
+            InvokeRegisteredRequestHandler(nameof(CharacterUnlockEnhanceSkillRequest), harness.Session, 12_406,
+                new CharacterUnlockEnhanceSkillRequest { SkillGroupId = uniframeGroupId });
+            _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), "Uniframe unlock items");
+            CharacterData pushed = ReadPushPayload<NotifyCharacterDataList>(harness,
+                nameof(NotifyCharacterDataList), "Uniframe unlock character").CharacterDataList.Single();
+            AssertEqual((uint)uniframeSkillId, pushed.EnhanceSkillList.Single().Id, "Uniframe unlock skill");
+            AssertEqual(0, ReadResponsePayload<CharacterUnlockEnhanceSkillResponse>(harness, 12_406,
+                nameof(CharacterUnlockEnhanceSkillResponse), "Uniframe unlock response").Code, "Uniframe unlock response Code");
+            AssertEqual(1, uniframeSaves.ReplaceOneCalls, "Uniframe unlock saves character once");
+        }
+
+        AscNet.Common.Database.Character lowUniframeRoster = CreateTestCharacterRoster(uniframeCharacterId, level: 80);
+        lowUniframeRoster.Uid = 48_110;
+        Player lowUniframePlayer = CreateDrawCompatibilityPlayer(lowUniframeRoster.Uid);
+        lowUniframePlayer.PlayerData.Level = 51;
+        using (MongoCollectionOverride mongo = MongoCollectionOverride.InstallForDailySignInCompatibility(
+            out _, out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> lowUniframeSaves, out _))
+        using (LoopbackSessionHarness harness = new(lowUniframeRoster, lowUniframePlayer,
+            CreateInventory(lowUniframeRoster.Uid, InitialCounts(uniframeCosts, surplus: 10)), "v47-uniframe-unlock-gate"))
+        {
+            InvokeRegisteredRequestHandler(nameof(CharacterUnlockEnhanceSkillRequest), harness.Session, 12_407,
+                new CharacterUnlockEnhanceSkillRequest { SkillGroupId = uniframeGroupId });
+            AssertEqual(20009021, ReadResponsePayload<CharacterUnlockEnhanceSkillResponse>(harness, 12_407,
+                nameof(CharacterUnlockEnhanceSkillResponse), "Uniframe level gate response").Code, "Uniframe level gate Code");
+            AssertEqual(0, lowUniframeSaves.ReplaceOneCalls, "Uniframe level gate does not save");
+            AssertNoAvailablePacket(harness, "Uniframe level gate");
+        }
+
+        const int selenaCharacterId = 1531003;
+        const int selenaSpeedAttackGroupId = 1533300;
+        const int selenaSpeedAttackSkillId = 153330;
+        AscNet.Common.Database.Character selenaRoster = CreateTestCharacterRoster(selenaCharacterId, level: 80);
+        selenaRoster.Uid = 48_111;
+        CharacterData selenaCharacter = RequiredCharacterData(selenaRoster, selenaCharacterId);
+        selenaCharacter.EnhanceSkillList.Add(new CharacterSkill { Id = 153328, Level = 18 });
+        Dictionary<int, int> selenaCosts = CostOfLevel(selenaSpeedAttackSkillId, 0, "Selena Enhanced Speed Attack");
+        Dictionary<int, int> selenaFinalCosts = CostOfLevel(153332, 0, "Selena Enhanced Finishing Move");
+        Dictionary<int, long> selenaInventory = InitialCounts(selenaCosts, surplus: 10);
+        foreach ((int itemId, int count) in selenaFinalCosts)
+            selenaInventory[itemId] = selenaInventory.GetValueOrDefault(itemId) + count;
+        Player selenaPlayer = CreateDrawCompatibilityPlayer(selenaRoster.Uid);
+        selenaPlayer.PlayerData.Level = 52;
+        using (MongoCollectionOverride mongo = MongoCollectionOverride.InstallForDailySignInCompatibility(
+            out _, out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> selenaSaves, out _))
+        using (LoopbackSessionHarness harness = new(selenaRoster, selenaPlayer,
+            CreateInventory(selenaRoster.Uid, selenaInventory), "v47-selena-speed-attack-unlock"))
+        {
+            InvokeRegisteredRequestHandler(nameof(CharacterUnlockEnhanceSkillRequest), harness.Session, 12_408,
+                new CharacterUnlockEnhanceSkillRequest { SkillGroupId = selenaSpeedAttackGroupId });
+            _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), "Selena skill unlock items");
+            CharacterData pushed = ReadPushPayload<NotifyCharacterDataList>(harness,
+                nameof(NotifyCharacterDataList), "Selena skill unlock character").CharacterDataList.Single();
+            AssertEqual((uint)selenaSpeedAttackSkillId,
+                pushed.EnhanceSkillList.Single(skill => skill.Id == selenaSpeedAttackSkillId).Id,
+                "Selena Enhanced Speed Attack unlocked");
+            AssertEqual(0, ReadResponsePayload<CharacterUnlockEnhanceSkillResponse>(harness, 12_408,
+                nameof(CharacterUnlockEnhanceSkillResponse), "Selena skill unlock response").Code,
+                "Selena skill unlock response Code");
+            AssertEqual(1, selenaSaves.ReplaceOneCalls, "Selena skill unlock saves character once");
+
+            AssertEqual(false, Character.MeetsCharacterSkillCondition(selenaCharacter, [7326], 52),
+                "Selena final skill rejects one missing prerequisite");
+            selenaCharacter.EnhanceSkillList.Add(new CharacterSkill { Id = 153329, Level = 18 });
+            AssertEqual(true, Character.MeetsCharacterSkillCondition(selenaCharacter, [7326], 52),
+                "Selena final skill accepts both prerequisites");
+            InvokeRegisteredRequestHandler(nameof(CharacterUnlockEnhanceSkillRequest), harness.Session, 12_409,
+                new CharacterUnlockEnhanceSkillRequest { SkillGroupId = 1533320 });
+            _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), "Selena final skill items");
+            CharacterData finalPush = ReadPushPayload<NotifyCharacterDataList>(harness,
+                nameof(NotifyCharacterDataList), "Selena final skill character").CharacterDataList.Single();
+            AssertEqual((uint)153332, finalPush.EnhanceSkillList.Single(skill => skill.Id == 153332).Id,
+                "Selena Enhanced Finishing Move unlocked");
+            AssertEqual(0, ReadResponsePayload<CharacterUnlockEnhanceSkillResponse>(harness, 12_409,
+                nameof(CharacterUnlockEnhanceSkillResponse), "Selena final skill response").Code,
+                "Selena final skill response Code");
+            AssertEqual(2, selenaSaves.ReplaceOneCalls, "Selena skill unlocks persist");
+        }
+
         // Upgrade the just-unlocked skill.
         AscNet.Common.Database.Character upgradeRoster = CreateTestCharacterRoster(characterId, level: 80);
         upgradeRoster.Uid = 48_107;
