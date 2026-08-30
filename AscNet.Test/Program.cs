@@ -28744,6 +28744,10 @@ namespace AscNet.Test
             AssertEqual(true, eligibleChallengeSection.StageId.Count > 0
                 && eligibleChallengeFeatureGroup.FeatureIds.Count > 0,
                 "Pain Cage intensive PK section and feature joins are nonempty");
+            AssertEqual(true,
+                eligibleChallengeFeatureGroup.FeatureIds.Count == eligibleChallengeFeatureGroup.BuffGroupIds.Count
+                && eligibleChallengeFeatureGroup.BuffGroupIds.All(id => id > 0),
+                "Pain Cage intensive features map positionally to client BuffGroup ids");
             AssertEqual(0, eligibleChallengeLogin.FubenBossSingleData.ChallengeTotalScore,
                 "Pain Cage intensive score does not reuse normal total score");
             NotifyFubenBossSingleData repeatedChallengeLogin = BuildLogin(player, null);

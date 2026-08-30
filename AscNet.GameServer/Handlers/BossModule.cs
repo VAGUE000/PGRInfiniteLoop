@@ -197,7 +197,12 @@ namespace AscNet.GameServer.Handlers
         private static readonly Lazy<List<BossSingleChallengeGradeTable>> ChallengeGrades = new(() =>
             TableReaderV2.Parse<BossSingleChallengeGradeTable>());
         private static readonly Lazy<List<BossSingleChallengeFeatureGroupTable>> ChallengeFeatureGroups = new(() =>
-            TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>().OrderBy(row => row.Id).ToList());
+            TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>()
+                .Where(row => row.FeatureIds.Count > 0
+                    && row.FeatureIds.Count == row.BuffGroupIds.Count
+                    && row.BuffGroupIds.All(id => id > 0))
+                .OrderBy(row => row.Id)
+                .ToList());
         private static readonly Lazy<Dictionary<int, BossSingleStageTable>> Stages = new(() =>
             TableReaderV2.Parse<BossSingleStageTable>().ToDictionary(row => row.StageId));
         private static readonly Lazy<Dictionary<int, BossSingleScoreRuleTable>> ScoreRules = new(() =>
