@@ -258,7 +258,7 @@ namespace AscNet.GameServer.Handlers
             state.BossList = bossList.ToList();
             session.player.Save();
 
-            HydrateNormalStages(session, sendPushes: true);
+            HydrateBossStages(session, sendPushes: true);
 
             session.SendResponse(new BossSingleSelectLevelTypeResponse
             {
@@ -787,7 +787,7 @@ namespace AscNet.GameServer.Handlers
             if (Reconcile(session.player, null))
                 session.player.Save();
             if (session.stage is not null)
-                HydrateNormalStages(session, sendPushes: false);
+                HydrateBossStages(session, sendPushes: false);
         }
 
         private static void ClaimRewards(Session session, int packetId, int? requestedId)
@@ -1126,6 +1126,45 @@ namespace AscNet.GameServer.Handlers
             state.BossLevelType = option.Key;
             state.BossList = option.Value.ToList();
             return true;
+        }
+
+        private static bool HydrateBossStages(Session session, bool sendPushes)
+        {
+            bool changed = HydrateNormalStages(session, sendPushes);
+            SimulatedBattlefieldState state = session.player.SimulatedBattlefield;
+            HashSet<int> stageIds = new();
+
+            foreach (BossSingleTrialGradeTable catalog in TrialGrades.Value)
+            {
+                if (catalog.LevelType is not (4 or 8)
+                    || (catalog.IsBestiaryCfg != 0) != (catalog.LevelType == 8))
+                    continue;
+                foreach (int sectionId in catalog.SectionId)
+                    if (sectionId > 0)
+                        stageIds.UnionWith(ResolveSection(sectionId, false).StageId);
+            }
+
+            BossSingleGradeTable? grade = state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null;
+            var challenge = ResolveChallengeData(state, grade);
+            if (challenge is not null)
+                stageIds.UnionWith(ResolveChallengeSection(challenge.Value.SectionId).StageId);
+
+            List<StageDatum>? addedStages = sendPushes ? new() : null;
+            foreach (int stageId in stageIds)
+            {
+                if (session.stage.Stages.ContainsKey((uint)stageId))
+                    continue;
+                StageDatum stage = NewStageDatum(stageId);
+                session.stage.AddStage(stage);
+                addedStages?.Add(stage);
+                changed = true;
+            }
+
+            if (addedStages?.Count > 0)
+                session.SendPush(new NotifyStageData { StageList = addedStages });
+            if (changed)
+                session.stage.Save();
+            return changed;
         }
 
         private static bool HydrateNormalStages(Session session, bool sendPushes)

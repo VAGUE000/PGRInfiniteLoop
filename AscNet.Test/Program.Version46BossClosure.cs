@@ -6,6 +6,7 @@ using AscNet.GameServer.Game;
 using AscNet.GameServer.Handlers;
 using AscNet.Table.V2.share.condition;
 using AscNet.Table.V2.share.fuben.bossinshot;
+using AscNet.Table.V2.share.fuben.bosssingle;
 using AscNet.Table.V2.share.robot;
 using MessagePack;
 using MongoDB.Bson;
@@ -61,6 +62,80 @@ internal partial class Program
             characterConfigId,
             characterId,
             playerCollection);
+    }
+
+    private static void ValidateBossSingleIntensiveStageHydration()
+    {
+        using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForBossCompatibility(
+            out _,
+            out _);
+        const long playerId = 46_780;
+        Player player = CreateDrawCompatibilityPlayer(playerId);
+        player.SimulatedBattlefield = new();
+        using LoopbackSessionHarness harness = new(
+            CreateDrawCompatibilityCharacter(playerId),
+            player,
+            sessionId: "v46-boss-intensive-hydration");
+        harness.Session.stage = CreateLoginAccountCompatibilityStage(playerId);
+        Type bossModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.BossModule");
+        InvokePrivateStaticWithArgs<object?>(
+            bossModule, "PrepareLogin", [harness.Session]);
+
+        BossSingleChallengeGradeTable challengeGrade = TableReaderV2.Parse<BossSingleChallengeGradeTable>().Single();
+        BossSingleGroupTable challengeGroup = TableReaderV2.Parse<BossSingleGroupTable>()
+            .Single(row => row.Id == challengeGrade.BossGroupId);
+        BossSingleChallengeFeatureGroupTable featureGroup = TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>()
+            .First(row => row.BuffGroupIds.Count > 0);
+        BossSingleSectionTable section = TableReaderV2.Parse<BossSingleSectionTable>()
+            .First(row => row.AfreshId == TableReaderV2.Parse<BossSingleGradeTable>().Max(grade => grade.AfreshId)
+                && challengeGroup.SectionId.Contains(row.SectionId));
+        player.SimulatedBattlefield.BossLevelType = TableReaderV2.Parse<BossSingleGradeTable>()
+            .Where(row => row.GradeType >= challengeGrade.NeedGradeType)
+            .OrderBy(row => row.GradeType)
+            .First()
+            .LevelType;
+        player.SimulatedBattlefield.BossTotalScore = challengeGrade.NeedScore;
+        player.SimulatedBattlefield.BossStageRecords =
+        [
+            new BossSingleStageRecordState
+            {
+                StageId = TableReaderV2.Parse<BossSingleStageTable>().First().StageId,
+                Score = challengeGrade.NeedScore,
+                MaxScore = challengeGrade.NeedScore
+            }
+        ];
+        player.SimulatedBattlefield.BossChallengeSelectedSection = section.Id;
+        player.SimulatedBattlefield.BossChallengeSelectedFeatureGroup = featureGroup.Id;
+        InvokePrivateStaticWithArgs<object?>(
+            bossModule, "PrepareLogin", [harness.Session]);
+        section = TableReaderV2.Parse<BossSingleSectionTable>().Single(row =>
+            row.Id == player.SimulatedBattlefield.BossChallengeSelectedSection);
+
+        int[] stageIds = section.StageId.Take(2).ToArray();
+        AssertEqual(2, stageIds.Length, "Intensive challenge section has two independently selected stages");
+        AssertEqual(true, stageIds.All(stageId => harness.Session.stage.Stages.ContainsKey((uint)stageId)),
+            "PrepareLogin hydrates current Intensive challenge stages");
+
+        int packetId = 46_781;
+        InvokeRegisteredRequestHandler(
+            nameof(PreFightRequest),
+            harness.Session,
+            packetId,
+            new PreFightRequest
+            {
+                PreFightData = new PreFightRequest.PreFightRequestPreFightData
+                {
+                    StageId = checked((uint)stageIds[0]),
+                    ChallengeCount = 1,
+                    CardIds = [1],
+                    RobotIds = [],
+                    BossSingleStageType = 3,
+                    BossSingleChallengeBuffGroup = featureGroup.BuffGroupIds[0]
+                }
+            });
+        PreFightResponse response = ReadResponsePayload<PreFightResponse>(
+            harness, packetId, nameof(PreFightResponse), "Intensive challenge PreFight");
+        AssertEqual(0, response.Code, "registered Intensive challenge PreFight is actionable");
     }
 
     private static void ValidateBossInshotEarlyLineupRejection(

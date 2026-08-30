@@ -405,6 +405,7 @@ namespace AscNet.Test
                 if (args.Contains("--boss-single-compat-only"))
                 {
                     ValidateBossSingleCompatibility();
+                    ValidateBossSingleIntensiveStageHydration();
                     return;
                 }
 
@@ -709,6 +710,7 @@ namespace AscNet.Test
                 ValidateGatherAwakenRewardCompatibility();
                 ValidateBossSingleLoginCompatibilityShape();
                 ValidateBossSingleCompatibility();
+                ValidateBossSingleIntensiveStageHydration();
                 ValidateSimulatedBattlefieldCompatibility();
                 ValidateCurrentClientGuideTableCompatibility();
                 ValidatePlayerCostTimeUploadCompatibility();
@@ -27925,10 +27927,8 @@ namespace AscNet.Test
                 "Pain Cage selected level persistence");
             if (!player.SimulatedBattlefield.BossList.SequenceEqual(selectedSections))
                 throw new InvalidDataException("Pain Cage selected boss list differs from the offered table-derived option.");
-            AssertEqual(selectedSections.Length, selectPushes.Count(name => name == nameof(NotifyStageData)),
-                "Pain Cage selection stage unlock pushes");
-            AssertEqual(true, selectPushes.All(name => name == nameof(NotifyStageData)),
-                "Pain Cage selection emits only stage unlock pushes");
+            AssertEqual(0, selectPushes.Count,
+                "Pain Cage selection does not duplicate login stage pushes");
             foreach (int stageId in selectedSections
                          .SelectMany(sectionId => sections.Single(row => row.SectionId == sectionId && row.AfreshId == 1).StageId))
             {
