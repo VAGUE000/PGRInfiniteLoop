@@ -122,6 +122,24 @@ namespace AscNet.Common.Database
         public List<int> Partners { get; set; } = new();
     }
 
+    public class BossSingleChallengeHistoryRecordState
+    {
+        [BsonElement("stage_id")]
+        public int StageId { get; set; }
+
+        [BsonElement("score")]
+        public int Score { get; set; }
+
+        [BsonElement("characters")]
+        public List<int> Characters { get; set; } = new();
+
+        [BsonElement("partners")]
+        public List<int> Partners { get; set; } = new();
+
+        [BsonElement("buff_group")]
+        public int BuffGroup { get; set; }
+    }
+
     public class BossSingleStageRecordState
     {
         [BsonElement("stage_id")]
@@ -231,6 +249,18 @@ namespace AscNet.Common.Database
 
         [BsonElement("boss_history")]
         public List<BossSingleHistoryRecordState> BossHistory { get; set; } = new();
+ 
+        [BsonElement("boss_challenge_history")]
+        public List<BossSingleChallengeHistoryRecordState> BossChallengeHistory { get; set; } = new();
+
+        [BsonElement("boss_challenge_selected_section")]
+        public int BossChallengeSelectedSection { get; set; }
+
+        [BsonElement("boss_challenge_selected_feature_group")]
+        public int BossChallengeSelectedFeatureGroup { get; set; }
+
+        [BsonElement("boss_challenge_delete_record_time")]
+        public long BossChallengeDeleteRecordTime { get; set; }
 
         [BsonElement("boss_stage_records")]
         public List<BossSingleStageRecordState> BossStageRecords { get; set; } = new();

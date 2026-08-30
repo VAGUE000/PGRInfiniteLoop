@@ -1730,6 +1730,16 @@ public sealed class NotifyBfrtProgressInfo
     public class NotifyFubenBossSingleData
     {
         [global::MessagePack.MessagePackObject(true)]
+        public class NotifyFubenBossSingleDataChallengeStageHistory
+        {
+            public Int32 StageId { get; set; }
+            public Int32 Score { get; set; }
+            public List<Int32> Characters { get; set; } = new();
+            public List<Int32> Partners { get; set; } = new();
+            public Int32 BuffGroup { get; set; }
+        }
+
+        [global::MessagePack.MessagePackObject(true)]
         public class NotifyFubenBossSingleDataFubenBossSingleData
         {
             public Int32 ActivityNo { get; set; }
@@ -1747,7 +1757,7 @@ public sealed class NotifyBfrtProgressInfo
             public List<Int32> BossList { get; set; } = new();
             public List<dynamic> TrialStageInfoList { get; set; } = new();
             public List<dynamic> BestiraryStageInfoList { get; set; } = new();
-            public List<dynamic> ChallengeStageHistoryList { get; set; } = new();
+            public List<NotifyFubenBossSingleDataChallengeStageHistory> ChallengeStageHistoryList { get; set; } = new();
             public List<dynamic> StageRecordList { get; set; } = new();
             public Int32 RewardGroupId { get; set; }
             public Int32 AfreshId { get; set; }

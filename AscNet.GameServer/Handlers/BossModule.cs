@@ -413,18 +413,25 @@ namespace AscNet.GameServer.Handlers
         [RequestPacketHandler("BossSingleChallengeRankInfoRequest")]
         public static void BossSingleChallengeRankInfoRequestHandler(Session session, Packet.Request packet)
         {
-            _ = packet.Deserialize<BossSingleChallengeRankInfoRequest>();
-            session.SendResponse(new BossSingleChallengeRankInfoResponse { Code = 0, Rank = 0, TotalRank = 0 }, packet.Id);
+            BossSingleChallengeRankInfoRequest request = packet.Deserialize<BossSingleChallengeRankInfoRequest>();
+            RankSnapshot rank = BuildChallengeRankSnapshot(session.player, request.StageId);
+            session.SendResponse(new BossSingleChallengeRankInfoResponse { Code = 0, Rank = rank.Rank, TotalRank = rank.Total }, packet.Id);
         }
 
         [RequestPacketHandler("BossSingleGetChallengeRankRequest")]
         public static void BossSingleGetChallengeRankRequestHandler(Session session, Packet.Request packet)
         {
-            _ = packet.Deserialize<BossSingleGetChallengeRankRequest>();
+            BossSingleGetChallengeRankRequest request = packet.Deserialize<BossSingleGetChallengeRankRequest>();
+            RankSnapshot snapshot = BuildChallengeRankSnapshot(session.player, request.StageId);
             session.SendResponse(new BossSingleGetChallengeRankResponse
             {
-                Code = 0,
-                LeftTime = checked((int)RemainingTime(null))
+                Code = 0, LeftTime = checked((int)RemainingTime(null)), RankNum = snapshot.Rank,
+                Score = snapshot.Score, TotalCount = snapshot.Total,
+                RankList = snapshot.Standings.Take(99).Select((entry, index) => (dynamic)new Dictionary<string, object>
+                {
+                    ["Id"] = entry.Player.PlayerData.Id, ["Name"] = entry.Player.PlayerData.Name,
+                    ["RankNum"] = index + 1, ["Score"] = entry.Score
+                }).ToList()
             }, packet.Id);
         }
 
@@ -445,7 +452,6 @@ namespace AscNet.GameServer.Handlers
             PreFightRequest.PreFightRequestPreFightData request,
             PreFightResponse response)
         {
-            ReconcileLive(session);
             int stageId = checked((int)request.StageId);
             int stageType = request.BossSingleStageType == 0 ? 1 : request.BossSingleStageType;
             if (!TryResolveFightStage(session.player.SimulatedBattlefield, stageId, stageType, out int sectionId, out BossSingleStageTable? stage)
@@ -461,9 +467,7 @@ namespace AscNet.GameServer.Handlers
             {
                 if (characters.Count == 0
                     || characters.Any(characterId => session.character.Characters.All(character => character.Id != characterId)))
-                {
                     return false;
-                }
 
                 SimulatedBattlefieldState state = session.player.SimulatedBattlefield;
                 int stageStatus = DetermineStageStatus(state, stageId, characters);
@@ -473,6 +477,9 @@ namespace AscNet.GameServer.Handlers
                 state.BossNormalStageTeams[sectionId] = characters.ToList();
                 session.player.Save();
             }
+            else if (stageType == 3 && !TryGetChallengeBuffGroup(request.BossSingleChallengeBuffGroup, session.player.SimulatedBattlefield, out int ignoredBuffGroup))
+                return false;
+            ApplyChallengeFeatureEvents(request, response.FightData, session.player.SimulatedBattlefield);
 
             session.PendingBossSingleScore = null;
             response.FightData.FightCheckType = 1;
@@ -517,6 +524,7 @@ namespace AscNet.GameServer.Handlers
             int levelType = stageType switch
             {
                 2 => 4,
+                3 => 9,
                 4 => 8,
                 _ => session.player.SimulatedBattlefield.BossLevelType
             };
@@ -526,11 +534,15 @@ namespace AscNet.GameServer.Handlers
                 ResolveScoreRule(stageId),
                 levelType,
                 DetermineStageStatus(session.player.SimulatedBattlefield, stageId, characters));
+            int buffGroup = 0;
+            _ = TryGetChallengeBuffGroup(fight.PreFight.PreFightData.BossSingleChallengeBuffGroup,
+                session.player.SimulatedBattlefield, out buffGroup);
             session.PendingBossSingleScore = new BossSinglePendingScore
             {
                 StageId = stageId,
                 StageType = stageType,
                 SectionId = sectionId,
+                BuffGroup = buffGroup,
                 Result = bossResult,
                 Characters = characters,
                 Partners = partners
@@ -581,9 +593,16 @@ namespace AscNet.GameServer.Handlers
                     ChallengeLevelType = challenge?.LevelType ?? 0,
                     ChallengeSectionId = challenge?.SectionId ?? 0,
                     ChallengeFeatureGroupId = challenge?.FeatureGroupId ?? 0,
-                    ChallengeTotalScore = 0,
-                    ChallengeStageHistoryList = [],
-                    ChallengeDeleteRecordTime = 0,
+                    ChallengeTotalScore = ChallengeTotal(state, challenge?.LevelType ?? 0),
+                    ChallengeStageHistoryList = state.BossChallengeHistory
+                        .OrderBy(record => record.StageId)
+                        .Select(record => new NotifyFubenBossSingleData.NotifyFubenBossSingleDataChallengeStageHistory
+                        {
+                            StageId = record.StageId, Score = record.Score,
+                            Characters = record.Characters.ToList(), Partners = record.Partners.ToList(),
+                            BuffGroup = record.BuffGroup
+                        }).ToList(),
+                    ChallengeDeleteRecordTime = checked((int)state.BossChallengeDeleteRecordTime),
                     IsResetOpen = true,
                     StageRecordList = state.BossStageRecords
                         .Where(record => !state.BossResetStageIds.Contains(record.StageId))
@@ -638,7 +657,43 @@ namespace AscNet.GameServer.Handlers
                 $"{state.BossActivityNo}:{challengeGrade.LevelType}:{challengeGrade.BossGroupId}") % (uint)sections.Count));
             int featureIndex = checked((int)(StableHash(
                 $"{state.BossActivityNo}:{challengeGrade.LevelType}:feature") % (uint)ChallengeFeatureGroups.Value.Count));
-            return (challengeGrade.LevelType, sections[sectionIndex], ChallengeFeatureGroups.Value[featureIndex].Id);
+            int sectionId = sections.Contains(state.BossChallengeSelectedSection)
+                ? state.BossChallengeSelectedSection : sections[sectionIndex];
+            int featureGroupId = ChallengeFeatureGroups.Value.Any(row => row.Id == state.BossChallengeSelectedFeatureGroup)
+                ? state.BossChallengeSelectedFeatureGroup : ChallengeFeatureGroups.Value[featureIndex].Id;
+            state.BossChallengeSelectedSection = sectionId;
+            state.BossChallengeSelectedFeatureGroup = featureGroupId;
+            return (challengeGrade.LevelType, sectionId, featureGroupId);
+        }
+ 
+        private static int ChallengeTotal(SimulatedBattlefieldState state, int levelType)
+        {
+            if (levelType <= 0) return 0;
+            int take = ChallengeGrades.Value.FirstOrDefault(row => row.LevelType == levelType)?.RankStageNum ?? 0;
+            return state.BossChallengeHistory.OrderByDescending(record => record.Score).Take(take).Sum(record => record.Score);
+        }
+
+        private static bool TryGetChallengeBuffGroup(dynamic? value, SimulatedBattlefieldState state, out int buffGroup)
+        {
+            buffGroup = 0;
+            if (value is null) return false;
+            try
+            {
+                object? raw = value is int direct ? direct
+                    : value is IDictionary<string, object> strings
+                        ? strings.FirstOrDefault(entry => string.Equals(entry.Key, "BuffGroup", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(entry.Key, "BuffGroupId", StringComparison.OrdinalIgnoreCase)).Value
+                        : value is IDictionary<object, object> map
+                            ? map.FirstOrDefault(entry => string.Equals(Convert.ToString(entry.Key), "BuffGroup", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(Convert.ToString(entry.Key), "BuffGroupId", StringComparison.OrdinalIgnoreCase)).Value
+                            : null;
+                buffGroup = Convert.ToInt32(raw, CultureInfo.InvariantCulture);
+            }
+            catch { return false; }
+            var challenge = ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
+            if (challenge is null || challenge.Value.FeatureGroupId <= 0) return false;
+            BossSingleChallengeFeatureGroupTable group = ChallengeFeatureGroups.Value.SingleOrDefault(row => row.Id == challenge.Value.FeatureGroupId)!;
+            return group is not null && group.BuffGroupIds.Contains(buffGroup);
         }
 
         internal static NotifyBossActivityData? BuildActivityLoginData(Session session, DateTimeOffset? now = null)
@@ -655,6 +710,7 @@ namespace AscNet.GameServer.Handlers
             long playerLevel = session.player.PlayerData.Level;
             BossSectionTable? section = ActivityBossSections.Value
                 .Where(candidate => candidate.ActivityId == activity.Id
+ 
                     && candidate.MinLevel <= playerLevel
                     && candidate.MaxLevel >= playerLevel)
                 .OrderBy(candidate => candidate.OrderId)
@@ -701,6 +757,23 @@ namespace AscNet.GameServer.Handlers
                     .Where(stageId => persistedStages.TryGetValue(stageId, out _))
                     .ToDictionary(stageId => stageId, stageId => checked((int)persistedStages[stageId].Score))
             };
+        }
+        private static void ApplyChallengeFeatureEvents(
+            PreFightRequest.PreFightRequestPreFightData request,
+            PreFightResponse.PreFightResponseFightData fightData,
+            SimulatedBattlefieldState state)
+        {
+            if (request.BossSingleStageType != 3) return;
+            var challenge = ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
+            if (challenge is null) return;
+            BossSingleChallengeFeatureGroupTable? group = ChallengeFeatureGroups.Value.SingleOrDefault(row => row.Id == challenge.Value.FeatureGroupId);
+            if (group is null) return;
+            foreach (int featureId in group.FeatureIds)
+            {
+                BossSingleChallengeFeatureTable? feature = TableReaderV2.Parse<BossSingleChallengeFeatureTable>().FirstOrDefault(row => row.Id == featureId);
+                if (feature is null) continue;
+                if (feature.FightEventIds > 0) fightData.EventIds.Add(feature.FightEventIds);
+            }
         }
 
         internal static void PrepareLogin(Session session)
@@ -777,20 +850,37 @@ namespace AscNet.GameServer.Handlers
             SimulatedBattlefieldState state = session.player.SimulatedBattlefield;
             if (!TryResolveFightStage(state, pending.StageId, pending.StageType, out _, out _))
                 return false;
-
             if (pending.StageType == 2 || pending.StageType == 4)
             {
-                Dictionary<int, int> scores = pending.StageType == 2
-                    ? state.BossTrialScores
-                    : state.BossBestiaryScores;
+                Dictionary<int, int> scores = pending.StageType == 2 ? state.BossTrialScores : state.BossBestiaryScores;
                 scores[pending.StageId] = Math.Max(scores.GetValueOrDefault(pending.StageId), pending.Result.TotalScore);
                 stageData = UpdateStageDatum(session, pending, pending.Result.TotalScore);
                 session.stage.Save();
+                session.player.Save();
+                return true;
+            }
+            if (pending.StageType == 3)
+            {
+                BossSingleChallengeHistoryRecordState? challengeRecord = state.BossChallengeHistory.Find(value => value.StageId == pending.StageId);
+                if (challengeRecord is null)
+                {
+                    challengeRecord = new BossSingleChallengeHistoryRecordState { StageId = pending.StageId };
+                    state.BossChallengeHistory.Add(challengeRecord);
+                }
+                if (pending.Result.TotalScore > challengeRecord.Score)
+                {
+                    challengeRecord.Score = pending.Result.TotalScore;
+                    challengeRecord.Characters = pending.Characters.ToList();
+                    challengeRecord.Partners = pending.Partners.ToList();
+                    challengeRecord.BuffGroup = pending.BuffGroup;
+                    state.BossLastScoreTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                }
+                stageData = UpdateStageDatum(session, pending, challengeRecord.Score);
+                session.player.Save();
                 return true;
             }
             if (pending.StageType != 1)
                 return false;
-
             BossSingleGradeTable grade = ResolveGrade(state.BossLevelType);
             int stageStatus = DetermineStageStatus(state, pending.StageId, pending.Characters);
             if (!CanConsumeAttempt(state, grade, pending.SectionId, pending.Characters, stageStatus))
@@ -995,6 +1085,7 @@ namespace AscNet.GameServer.Handlers
             state.BossNormalStageTeams ??= new();
             state.BossTrialScores ??= new();
             state.BossBestiaryScores ??= new();
+            state.BossChallengeHistory ??= new();
             state.BossClaimedRewardIds ??= new();
         }
 
@@ -1012,6 +1103,10 @@ namespace AscNet.GameServer.Handlers
             state.BossStageRecords.Clear();
             state.BossResetStageIds.Clear();
             state.BossClaimedRewardIds.Clear();
+            state.BossChallengeHistory.Clear();
+            state.BossChallengeSelectedSection = 0;
+            state.BossChallengeSelectedFeatureGroup = 0;
+            state.BossChallengeDeleteRecordTime = 0;
             state.BossLastScoreTime = 0;
         }
 
@@ -1136,18 +1231,19 @@ namespace AscNet.GameServer.Handlers
                 return TryResolveNormalStage(state, stageId, out sectionId, out stage);
             if (stageType == 2)
                 return TryResolveCatalogStage(4, stageId, false, out sectionId);
-            if (stageType == 4)
+            if (stageType == 3)
             {
-                // Intensive Battle uses the table-selected ultimate-zone section once unlocked.
-                (int LevelType, int SectionId, int FeatureGroupId)? challenge =
-                    ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
-                if (challenge is not null && ResolveSection(challenge.Value.SectionId, false).StageId.Contains(stageId))
+                var challenge = ResolveChallengeData(state, state.BossLevelType > 0 ? ResolveGrade(state.BossLevelType) : null);
+                if (challenge is not null && challenge.Value.LevelType == 9
+                    && ResolveSection(challenge.Value.SectionId, false).StageId.Contains(stageId))
                 {
                     sectionId = challenge.Value.SectionId;
                     return true;
                 }
-                return TryResolveCatalogStage(8, stageId, true, out sectionId);
+                return false;
             }
+            if (stageType == 4)
+                return TryResolveCatalogStage(8, stageId, true, out sectionId);
             return false;
         }
 
@@ -1323,6 +1419,7 @@ namespace AscNet.GameServer.Handlers
                     candidate.SimulatedBattlefield.BossActivityNo == state.BossActivityNo
                     && candidate.SimulatedBattlefield.BossLevelType == state.BossLevelType).ToList();
             }
+
             catch
             {
                 participants = [player];
@@ -1341,6 +1438,21 @@ namespace AscNet.GameServer.Handlers
             int rank = score <= 0
                 ? 0
                 : standings.FindIndex(entry => entry.Player.PlayerData.Id == player.PlayerData.Id) + 1;
+            return new RankSnapshot(rank, standings.Count, score, standings);
+        }
+        private static RankSnapshot BuildChallengeRankSnapshot(Player player, int stageId)
+        {
+            SimulatedBattlefieldState state = player.SimulatedBattlefield;
+            List<Player> participants;
+            try { participants = Player.collection.Find(candidate => candidate.SimulatedBattlefield.BossActivityNo == state.BossActivityNo).ToList(); }
+            catch { participants = [player]; }
+            if (participants.All(candidate => candidate.PlayerData.Id != player.PlayerData.Id)) participants.Add(player);
+            int Score(SimulatedBattlefieldState value) => stageId == 0 ? ChallengeTotal(value, 9) : value.BossChallengeHistory.FirstOrDefault(record => record.StageId == stageId)?.Score ?? 0;
+            List<(Player Player, int Score)> standings = participants.Select(candidate => (candidate, Score(candidate.SimulatedBattlefield)))
+                .Where(entry => entry.Item2 > 0).OrderByDescending(entry => entry.Item2)
+                .ThenBy(entry => entry.candidate.SimulatedBattlefield.BossLastScoreTime).ThenBy(entry => entry.candidate.PlayerData.Id).ToList();
+            int score = Score(state);
+            int rank = score <= 0 ? 0 : standings.FindIndex(entry => entry.Player.PlayerData.Id == player.PlayerData.Id) + 1;
             return new RankSnapshot(rank, standings.Count, score, standings);
         }
 

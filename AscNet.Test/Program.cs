@@ -27644,7 +27644,7 @@ namespace AscNet.Test
                 throw new InvalidDataException($"{name}: expected {responseName} within {maxPackets} packets.");
             }
 
-            PreFightResponse StartFight(int packetId, int stageId, int stageType, IReadOnlyList<uint>? cardIds = null)
+            PreFightResponse StartFight(int packetId, int stageId, int stageType, IReadOnlyList<uint>? cardIds = null, int buffGroup = 0)
             {
                 InvokeRegisteredRequestHandler(
                     nameof(PreFightRequest),
@@ -27658,7 +27658,8 @@ namespace AscNet.Test
                             ChallengeCount = 1,
                             CardIds = cardIds?.ToList() ?? [characterId],
                             RobotIds = [],
-                            BossSingleStageType = stageType
+                            BossSingleStageType = stageType,
+                            BossSingleChallengeBuffGroup = buffGroup
                         }
                     });
                 return ReadResponsePayload<PreFightResponse>(
@@ -28005,6 +28006,55 @@ namespace AscNet.Test
                 "Pain Cage partial remaining-time scores are below their caps");
             AssertEqual(true, auxiliaryTimeScores[0].Score != auxiliaryTimeScores[1].Score,
                 "Pain Cage remaining-time scores vary proportionally with distinct durations");
+            List<BossSingleChallengeGradeTable> challengeGrades = TableReaderV2.Parse<BossSingleChallengeGradeTable>();
+            List<BossSingleChallengeFeatureGroupTable> challengeGroups = TableReaderV2.Parse<BossSingleChallengeFeatureGroupTable>();
+            int preIntensiveLevelType = player.SimulatedBattlefield.BossLevelType;
+            List<int> preIntensiveBossList = player.SimulatedBattlefield.BossList.ToList();
+            List<AscNet.Common.Database.BossSingleStageRecordState> preIntensiveRecords = player.SimulatedBattlefield.BossStageRecords.ToList();
+            int preIntensiveTotal = player.SimulatedBattlefield.BossTotalScore;
+            int preIntensiveCurrent = player.SimulatedBattlefield.BossCurrentTotalScore;
+            int preIntensiveMax = player.SimulatedBattlefield.BossMaxScore;
+            int preIntensiveSection = player.SimulatedBattlefield.BossChallengeSelectedSection;
+            int preIntensiveFeatureGroup = player.SimulatedBattlefield.BossChallengeSelectedFeatureGroup;
+            List<AscNet.Common.Database.BossSingleChallengeHistoryRecordState> preIntensiveHistory = player.SimulatedBattlefield.BossChallengeHistory.ToList();
+            player.SimulatedBattlefield.BossLevelType = grades.Where(row => row.GradeType >= challengeGrades.Single().NeedGradeType).OrderBy(row => row.GradeType).First().LevelType;
+            player.SimulatedBattlefield.BossList = groups.Single(row => row.Id == grades.Single(value => value.LevelType == player.SimulatedBattlefield.BossLevelType).GroupId.First()).SectionId.ToList();
+            player.SimulatedBattlefield.BossStageRecords =
+            [
+                new AscNet.Common.Database.BossSingleStageRecordState
+                {
+                    StageId = stages.First().StageId,
+                    Score = challengeGrades.Single().NeedScore,
+                    MaxScore = challengeGrades.Single().NeedScore
+                }
+            ];
+            player.SimulatedBattlefield.BossChallengeSelectedFeatureGroup = challengeGroups.First(row => row.BuffGroupIds.Any(id => id > 0)).Id;
+            NotifyFubenBossSingleData challengeLogin = BuildLogin(player, null);
+            int challengeStageId = sections.Where(row => row.SectionId == challengeLogin.FubenBossSingleData.ChallengeSectionId).OrderByDescending(row => row.AfreshId).First().StageId.First();
+            int challengeBuffGroup = challengeGroups.Single(row => row.Id == challengeLogin.FubenBossSingleData.ChallengeFeatureGroupId).BuffGroupIds.First(id => id > 0);
+            PreFightResponse intensivePreFight = StartFight(82_030, challengeStageId, stageType: 3, buffGroup: challengeBuffGroup);
+            AssertEqual(0, intensivePreFight.Code, "Pain Cage intensive type3 pre-fight");
+            BossSingleStageTable intensiveStage = stages.Single(row => row.StageId == challengeStageId);
+            FightSettleResponse intensiveSettle = SettleFight(82_031, intensivePreFight, intensiveStage, 100, 0, fightSeconds: 8);
+            BossSingleFightResult intensiveResult = RequiredBossResult(intensiveSettle, "Pain Cage intensive result");
+            BossSingleSaveScoreResponse intensiveSave = SaveScore(82_032, challengeStageId, "Pain Cage intensive save", out List<string> intensivePushes);
+            AssertEqual(0, intensiveSave.Code, "Pain Cage intensive save");
+            AssertEqual(true, intensivePushes.Contains(nameof(NotifyBossSingleRankInfo)), "Pain Cage intensive rank push");
+            AssertEqual(intensiveResult.TotalScore, player.SimulatedBattlefield.BossChallengeHistory.Single(row => row.StageId == challengeStageId).Score, "Pain Cage intensive history");
+            player.SimulatedBattlefield.BossChallengeHistory.Add(new AscNet.Common.Database.BossSingleChallengeHistoryRecordState { StageId = challengeStageId + 1, Score = intensiveResult.TotalScore + 1 });
+            player.SimulatedBattlefield.BossChallengeHistory.Add(new AscNet.Common.Database.BossSingleChallengeHistoryRecordState { StageId = challengeStageId + 2, Score = intensiveResult.TotalScore - 1 });
+            AssertEqual(intensiveResult.TotalScore + intensiveResult.TotalScore + 1, BuildLogin(player, null).FubenBossSingleData.ChallengeTotalScore, "Pain Cage intensive top-two total");
+            AscNet.Common.Database.Player intensiveReload = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(player.ToBsonDocument());
+            AssertEqual(3, intensiveReload.SimulatedBattlefield.BossChallengeHistory.Count, "Pain Cage intensive relog history");
+            player.SimulatedBattlefield.BossLevelType = preIntensiveLevelType;
+            player.SimulatedBattlefield.BossList = preIntensiveBossList;
+            player.SimulatedBattlefield.BossStageRecords = preIntensiveRecords;
+            player.SimulatedBattlefield.BossTotalScore = preIntensiveTotal;
+            player.SimulatedBattlefield.BossCurrentTotalScore = preIntensiveCurrent;
+            player.SimulatedBattlefield.BossMaxScore = preIntensiveMax;
+            player.SimulatedBattlefield.BossChallengeSelectedSection = preIntensiveSection;
+            player.SimulatedBattlefield.BossChallengeSelectedFeatureGroup = preIntensiveFeatureGroup;
+            player.SimulatedBattlefield.BossChallengeHistory = preIntensiveHistory;
 
 
             List<int> selectedStageIds = selectedSections
@@ -28664,6 +28714,7 @@ namespace AscNet.Test
             player.SimulatedBattlefield.BossStageRecords[2].Score++;
             player.SimulatedBattlefield.BossStageRecords[2].MaxScore++;
             player.SimulatedBattlefield.BossTotalScore = 0;
+            player.SimulatedBattlefield.BossChallengeSelectedFeatureGroup = challengeGroups.First(row => row.BuffGroupIds.Any(id => id > 0)).Id;
             NotifyFubenBossSingleData eligibleChallengeLogin = BuildLogin(player, null);
             AssertEqual(challengeGrade.LevelType, eligibleChallengeLogin.FubenBossSingleData.ChallengeLevelType,
                 "Pain Cage normal total score unlocks table-backed intensive level");
@@ -28700,10 +28751,14 @@ namespace AscNet.Test
             AssertEqual(2d, ultimateTimeCoefficient,
                 "Pain Cage Ultimate Zone table time coefficient");
             const int ultimateFightSeconds = 19;
+            int ultimateBuffGroup = challengeGroups
+                .Single(row => row.Id == eligibleChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId)
+                .BuffGroupIds.First(id => id > 0);
             PreFightResponse ultimatePreFight = StartFight(
                 82_046,
                 ultimateStage.StageId,
-                stageType: 4);
+                stageType: 3,
+                buffGroup: ultimateBuffGroup);
             AssertEqual(ultimateStage.PassTimeLimit, ultimatePreFight.FightData.PassTimeLimit,
                 "Pain Cage Ultimate Zone table time limit");
             FightSettleResponse ultimateSettle = SettleFight(

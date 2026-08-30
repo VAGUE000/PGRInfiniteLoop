@@ -1574,8 +1574,8 @@
       ]
     },
     {
-      "columns": 1,
-      "contentSha256": "9200130c159c14dc44e43180900a6283794e00f7f0e2adf3bc14b79059434d3a",
+      "columns": 7,
+      "contentSha256": "023816b80572279d63f4fbda92652cdae367282671a7096f252639badfc289a1",
       "filter": "all",
       "naturalKey": "Id",
       "path": "share/fuben/bosssingle/BossSingleChallengeFeatureGroup.tsv",
@@ -1585,8 +1585,8 @@
       ]
     },
     {
-      "columns": 4,
-      "contentSha256": "2638cdbf5d72112f4bb35b3f21bb30b3226a89d0bb23f5f9d53d78cec917feca",
+      "columns": 5,
+      "contentSha256": "75e47ebfa6896e0e10ce5040d1bb838bda10aa4d62c4e3f0f9ce9e76a5d6ab36",
       "filter": "all",
       "naturalKey": "LevelType",
       "path": "share/fuben/bosssingle/BossSingleChallengeGrade.tsv",
@@ -3608,6 +3608,28 @@
         "share/miniactivity/musicgame/concertpreheating/ConcertPreHeatingActivity.json",
         "share/signin/SignIn.json",
         "SimulateTrain permanent practice:TimeId=201"
+      ]
+    },
+    {
+      "columns": 2,
+      "contentSha256": "6894f282cddc6549ac5c68256ab56e7a55b90c2be2e0be46b4f2612fc0509bb4",
+      "filter": "all",
+      "naturalKey": "Id",
+      "path": "share/fuben/bosssingle/BossSingleChallengeFeature.tsv",
+      "rows": 83,
+      "source": [
+        "share/fuben/bosssingle/BossSingleChallengeFeature.json"
+      ]
+    },
+    {
+      "columns": 5,
+      "contentSha256": "59c310dadae6552a7005275a49324fad940fc5fe0a395c0fecc888b401edc1e5",
+      "filter": "all",
+      "naturalKey": "Id",
+      "path": "share/fuben/bosssingle/BossSingleChallengeBuffGroup.tsv",
+      "rows": 55,
+      "source": [
+        "share/fuben/bosssingle/BossSingleChallengeBuffGroup.json"
       ]
     }
   ],

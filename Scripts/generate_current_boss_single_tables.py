@@ -14,6 +14,8 @@ DEFAULT_OUTPUT = REPO_ROOT / "Resources" / "table" / "share" / "fuben" / "bosssi
 BOSS_FILES = (
     "BossSingleGrade", "BossSingleGroup", "BossSingleSection", "BossSingleStage",
     "BossSingleScoreRule", "BossSingleScoreReward", "BossSingleTrialGrade",
+    "BossSingleChallengeGrade", "BossSingleChallengeFeatureGroup",
+    "BossSingleChallengeFeature", "BossSingleChallengeBuffGroup",
 )
 
 
@@ -62,6 +64,9 @@ def number_list(row: dict[str, Any], field: str, source: Path, *, floats: bool =
         else:
             result.append(item)
     return result
+
+def number_list_or_empty(row: dict[str, Any], field: str, source: Path) -> list[str | int]:
+    return number_list(row, field, source) if field in row else []
 
 
 def unique_index(rows: list[dict[str, Any]], field: str, source: Path) -> dict[int, dict[str, Any]]:
@@ -186,6 +191,33 @@ def generate(source: Path) -> dict[str, bytes]:
     trial_cols = ["LevelType", "IsBestiaryCfg"] + repeated_columns("SectionId", trial_width)
     output["BossSingleTrialGrade.tsv"] = table(trial_cols, ([integer(r, "LevelType", paths["BossSingleTrialGrade"]), boolean01(r, "IsBestiaryCfg", paths["BossSingleTrialGrade"])] + padded(number_list(r, "SectionId", paths["BossSingleTrialGrade"]), trial_width) for r in trials))
 
+    challenge_grade_path = paths["BossSingleChallengeGrade"]
+    challenge_grades = sorted(data["BossSingleChallengeGrade"], key=lambda r: integer(r, "LevelType", challenge_grade_path))
+    unique_index(challenge_grades, "LevelType", challenge_grade_path)
+    challenge_grade_cols = ["LevelType", "NeedGradeType", "NeedScore", "BossGroupId", "RankStageNum"]
+    output["BossSingleChallengeGrade.tsv"] = table(challenge_grade_cols, ([integer(r, f, challenge_grade_path) for f in challenge_grade_cols] for r in challenge_grades))
+
+    feature_groups = sorted(data["BossSingleChallengeFeatureGroup"], key=lambda r: integer(r, "Id", paths["BossSingleChallengeFeatureGroup"]))
+    feature_group_path = paths["BossSingleChallengeFeatureGroup"]
+    unique_index(feature_groups, "Id", feature_group_path)
+    output["BossSingleChallengeFeatureGroup.tsv"] = table(
+        ["Id"] + repeated_columns("FeatureIds", 3) + repeated_columns("BuffGroupIds", 3),
+        ([integer(r, "Id", feature_group_path)] + padded(number_list_or_empty(r, "FeatureIds", feature_group_path), 3) + padded(number_list_or_empty(r, "BuffGroupIds", feature_group_path), 3) for r in feature_groups))
+
+    features = sorted(data["BossSingleChallengeFeature"], key=lambda r: integer(r, "Id", paths["BossSingleChallengeFeature"]))
+    feature_path = paths["BossSingleChallengeFeature"]
+    unique_index(features, "Id", feature_path)
+    feature_width = max((len(number_list(r, "FightEventIds", feature_path)) for r in features), default=0)
+    output["BossSingleChallengeFeature.tsv"] = table(
+        ["Id"] + repeated_columns("FightEventIds", feature_width),
+        ([integer(r, "Id", feature_path)] + padded(number_list(r, "FightEventIds", feature_path), feature_width) for r in features))
+
+    buffs = sorted(data["BossSingleChallengeBuffGroup"], key=lambda r: integer(r, "Id", paths["BossSingleChallengeBuffGroup"]))
+    buff_path = paths["BossSingleChallengeBuffGroup"]
+    unique_index(buffs, "Id", buff_path)
+    output["BossSingleChallengeBuffGroup.tsv"] = table(
+        ["Id", "BuffGroupId", "Index"] + repeated_columns("Buff", 2),
+        ([integer(r, f, buff_path) for f in ("Id", "BuffGroupId", "Index")] + padded(number_list(r, "Buff", buff_path), 2) for r in buffs))
     relation_rows: list[list[int]] = []
     seen_relations: set[tuple[int, int]] = set()
     for row in score_rewards:
