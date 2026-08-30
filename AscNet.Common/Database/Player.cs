@@ -138,6 +138,9 @@ namespace AscNet.Common.Database
 
         [BsonElement("buff_group")]
         public int BuffGroup { get; set; }
+
+        [BsonElement("buff_choices")]
+        public Dictionary<int, int> BuffChoices { get; set; } = new();
     }
 
     public class BossSingleStageRecordState

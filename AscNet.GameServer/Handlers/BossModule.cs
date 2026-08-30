@@ -494,8 +494,9 @@ namespace AscNet.GameServer.Handlers
             {
                 int ignoredBuffGroup;
                 List<int> ignoredFeatureIds;
+                Dictionary<int, int> ignoredBuffChoices;
                 if (!TryGetChallengeBuffGroup(request.BossSingleChallengeBuffGroup,
-                    session.player.SimulatedBattlefield, out ignoredBuffGroup, out ignoredFeatureIds))
+                    session.player.SimulatedBattlefield, out ignoredBuffGroup, out ignoredFeatureIds, out ignoredBuffChoices))
                     return false;
             }
             ApplyChallengeFeatureEvents(request, response.FightData, session.player.SimulatedBattlefield);
@@ -555,8 +556,9 @@ namespace AscNet.GameServer.Handlers
                 DetermineStageStatus(session.player.SimulatedBattlefield, stageId, characters));
             int pendingBuffGroup;
             List<int> pendingFeatureIds;
+            Dictionary<int, int> pendingBuffChoices;
             _ = TryGetChallengeBuffGroup(fight.PreFight.PreFightData.BossSingleChallengeBuffGroup,
-                session.player.SimulatedBattlefield, out pendingBuffGroup, out pendingFeatureIds);
+                session.player.SimulatedBattlefield, out pendingBuffGroup, out pendingFeatureIds, out pendingBuffChoices);
             int buffGroup = pendingBuffGroup;
             session.PendingBossSingleScore = new BossSinglePendingScore
             {
@@ -564,6 +566,7 @@ namespace AscNet.GameServer.Handlers
                 StageType = stageType,
                 SectionId = sectionId,
                 BuffGroup = buffGroup,
+                BuffChoices = pendingBuffChoices,
                 Result = bossResult,
                 Characters = characters,
                 Partners = partners
@@ -625,7 +628,7 @@ namespace AscNet.GameServer.Handlers
                                 ? new Dictionary<string, object>
                                 {
                                     ["BuffGroupId"] = record.BuffGroup,
-                                    ["BuffChoices"] = new Dictionary<int, int>()
+                                    ["BuffChoices"] = new Dictionary<int, int>(record.BuffChoices)
                                 }
                                 : null
                         }).ToList(),
@@ -710,10 +713,12 @@ namespace AscNet.GameServer.Handlers
             object? value,
             SimulatedBattlefieldState state,
             out int buffGroup,
-            out List<int> featureIds)
+            out List<int> featureIds,
+            out Dictionary<int, int> buffChoices)
         {
             buffGroup = 0;
             featureIds = [];
+            buffChoices = new();
             if (value is null) return false;
 
             object? raw = value is int direct ? direct
@@ -745,16 +750,11 @@ namespace AscNet.GameServer.Handlers
                 _ => null
             };
             if (choices is null) return true;
-            if (choices is not IDictionary<object, object>
-                && choices is not IDictionary<string, object>)
+            if (choices is not System.Collections.IDictionary choiceMap)
                 return false;
-            IEnumerable<KeyValuePair<object, object>> choiceEntries = choices switch
-            {
-                IDictionary<object, object> objectChoiceEntries => objectChoiceEntries,
-                IDictionary<string, object> stringChoiceEntries => stringChoiceEntries
-                    .Select(entry => new KeyValuePair<object, object>(entry.Key, entry.Value)),
-                _ => []
-            };
+            IEnumerable<KeyValuePair<object, object>> choiceEntries = choiceMap.Keys
+                .Cast<object>()
+                .Select(key => new KeyValuePair<object, object>(key, choiceMap[key]!));
             int selectedBuffGroup = buffGroup;
             List<BossSingleChallengeBuffGroupTable> buffRows = TableReaderV2
                 .Parse<BossSingleChallengeBuffGroupTable>()
@@ -770,6 +770,7 @@ namespace AscNet.GameServer.Handlers
                     return false;
                 int selectedFeatureId = row.Buff[selectedIndex - 1];
                 if (selectedFeatureId <= 0) return false;
+                buffChoices[index] = selectedIndex;
                 featureIds.Add(selectedFeatureId);
             }
             return true;
@@ -782,7 +783,7 @@ namespace AscNet.GameServer.Handlers
         {
             if (request.BossSingleStageType != 3) return;
             if (!TryGetChallengeBuffGroup(request.BossSingleChallengeBuffGroup, state,
-                out int selectedBuffGroup, out List<int> featureIds))
+                out int selectedBuffGroup, out List<int> featureIds, out Dictionary<int, int> _))
                 return;
             foreach (int featureId in featureIds)
             {
@@ -952,6 +953,7 @@ namespace AscNet.GameServer.Handlers
                     challengeRecord.Characters = pending.Characters.ToList();
                     challengeRecord.Partners = pending.Partners.ToList();
                     challengeRecord.BuffGroup = pending.BuffGroup;
+                    challengeRecord.BuffChoices = new(pending.BuffChoices);
                     state.BossLastScoreTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 }
                 stageData = UpdateStageDatum(session, pending, challengeRecord.Score);

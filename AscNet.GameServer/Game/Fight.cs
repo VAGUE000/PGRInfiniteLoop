@@ -8,6 +8,7 @@ namespace AscNet.GameServer.Game
         public int StageType { get; init; }
         public int SectionId { get; init; }
         public int BuffGroup { get; init; }
+        public Dictionary<int, int> BuffChoices { get; init; } = new();
         public BossSingleFightResult Result { get; init; } = new();
         public List<int> Characters { get; init; } = new();
         public List<int> Partners { get; init; } = new();

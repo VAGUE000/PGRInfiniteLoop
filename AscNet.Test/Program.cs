@@ -27646,7 +27646,8 @@ namespace AscNet.Test
                 throw new InvalidDataException($"{name}: expected {responseName} within {maxPackets} packets.");
             }
 
-            PreFightResponse StartFight(int packetId, int stageId, int stageType, IReadOnlyList<uint>? cardIds = null, int buffGroup = 0)
+            PreFightResponse StartFight(int packetId, int stageId, int stageType,
+                IReadOnlyList<uint>? cardIds = null, object? buffGroup = null)
             {
                 InvokeRegisteredRequestHandler(
                     nameof(PreFightRequest),
@@ -28065,11 +28066,40 @@ namespace AscNet.Test
                 .ChallengeStageHistoryList.Single(row => row.StageId == challengeStageId).BuffGroup;
             AssertEqual(challengeBuffGroup, (int)intensiveHistoryBuffGroup["BuffGroupId"],
                 "Pain Cage intensive history emits the client BuffGroup object");
+            AssertEqual(0, ((Dictionary<int, int>)intensiveHistoryBuffGroup["BuffChoices"]).Count,
+                "Pain Cage direct BuffGroup keeps empty choice map");
             player.SimulatedBattlefield.BossChallengeHistory.Add(new AscNet.Common.Database.BossSingleChallengeHistoryRecordState { StageId = challengeStageId + 1, Score = intensiveResult.TotalScore + 1 });
             player.SimulatedBattlefield.BossChallengeHistory.Add(new AscNet.Common.Database.BossSingleChallengeHistoryRecordState { StageId = challengeStageId + 2, Score = intensiveResult.TotalScore - 1 });
             AssertEqual(intensiveResult.TotalScore + intensiveResult.TotalScore + 1, BuildLogin(player, null).FubenBossSingleData.ChallengeTotalScore, "Pain Cage intensive top-two total");
             AscNet.Common.Database.Player intensiveReload = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Player>(player.ToBsonDocument());
             AssertEqual(3, intensiveReload.SimulatedBattlefield.BossChallengeHistory.Count, "Pain Cage intensive relog history");
+            BossSingleChallengeBuffGroupTable challengeBuffChoice = TableReaderV2
+                .Parse<BossSingleChallengeBuffGroupTable>()
+                .First(row => row.BuffGroupId == challengeBuffGroup && row.Index > 0 && row.Buff.Count > 0);
+            int choiceFeatureEvent = TableReaderV2.Parse<BossSingleChallengeFeatureTable>()
+                .Single(row => row.Id == challengeBuffChoice.Buff[0]).FightEventIds;
+            PreFightResponse clientShapedPreFight = StartFight(
+                82_033,
+                challengeStageId,
+                stageType: 3,
+                buffGroup: new Dictionary<string, object>
+                {
+                    ["BuffGroupId"] = challengeBuffGroup,
+                    ["BuffChoices"] = new Dictionary<int, int> { [challengeBuffChoice.Index] = 1 }
+                });
+            AssertEqual(0, clientShapedPreFight.Code,
+                "Pain Cage client-shaped intensive module pre-fight");
+            AssertEqual(true, clientShapedPreFight.FightData.EventIds.Contains(challengeFeatureEvent)
+                && clientShapedPreFight.FightData.EventIds.Contains(choiceFeatureEvent),
+                "Pain Cage client-shaped module applies base and selected table-derived events");
+            player.SimulatedBattlefield.BossChallengeHistory.RemoveAll(row => row.StageId == challengeStageId);
+            _ = SettleFight(82_034, clientShapedPreFight, intensiveStage, 100, 0, fightSeconds: 8);
+            _ = SaveScore(82_035, challengeStageId, "Pain Cage client-shaped intensive save", out _);
+            dynamic persistedChoiceHistory = BuildLogin(player, null).FubenBossSingleData
+                .ChallengeStageHistoryList.Single(row => row.StageId == challengeStageId).BuffGroup;
+            Dictionary<int, int> persistedChoices = (Dictionary<int, int>)persistedChoiceHistory["BuffChoices"];
+            AssertEqual(1, persistedChoices[challengeBuffChoice.Index],
+                "Pain Cage intensive history persists selected BuffChoices");
             player.SimulatedBattlefield.BossLevelType = preIntensiveLevelType;
             player.SimulatedBattlefield.BossList = preIntensiveBossList;
             player.SimulatedBattlefield.BossStageRecords = preIntensiveRecords;
