@@ -880,7 +880,7 @@ namespace AscNet.GameServer.Handlers
             int passTime = Math.Max(1, stage.PassTimeLimit);
             int timeLeft = Math.Clamp(checked((int)settle.LeftTime), 0, passTime);
             int timeScore = Math.Min(stage.LeftTimeScore,
-                checked((int)Math.Floor(timeLeft * timeCoefficient)));
+                checked((int)Math.Floor(timeLeft * timeCoefficient * passTime)));
 
             List<double> characterHp = settle.NpcHpInfo?.Values
                 .Where(npc => npc.Type == 1)

@@ -27975,12 +27975,12 @@ namespace AscNet.Test
                 double timeCoefficient = double.Parse(
                     scoreRule.LeftTimeScore[coefficientIndex], CultureInfo.InvariantCulture);
                 int expectedTimeScore = Math.Min(stage.LeftTimeScore, checked((int)Math.Floor(
-                    (stage.PassTimeLimit - fightSeconds) * timeCoefficient)));
+                    (stage.PassTimeLimit - fightSeconds) * timeCoefficient * stage.PassTimeLimit)));
                 AssertEqual(expectedTimeScore, result.TimeScore,
                     $"Pain Cage {(bestiary ? "bestiary" : "trial")} table-derived remaining-time score");
-                auxiliaryTimeScores.Add((result.TimeLeft, result.TimeScore, result.MaxTimeScore));
-                AssertEqual(true, result.TimeScore > 0 && result.TimeScore <= result.MaxTimeScore,
-                    $"Pain Cage {(bestiary ? "bestiary" : "trial")} remaining-time score is positive and capped");
+                auxiliaryTimeScores.Add((result.TimeLeft, result.TimeScore, stage.LeftTimeScore));
+                AssertEqual(true, result.TimeScore > 0 && result.TimeScore <= stage.LeftTimeScore,
+                    $"Pain Cage {(bestiary ? "bestiary" : "trial")} remaining-time score is positive and table-capped");
                 AssertEqual(true, result.TotalScore > 0,
                     $"Pain Cage {(bestiary ? "bestiary" : "trial")} positive score");
                 BossSingleSaveScoreResponse save = SaveScore(
@@ -28260,13 +28260,15 @@ namespace AscNet.Test
                 player.SimulatedBattlefield.BossNormalStageTeams[normalSectionId].Select(Convert.ToInt64).ToArray(),
                 "Pain Cage pre-fight team persistence");
 
+            const int normalFightSeconds = 20;
             const int normalSettlePacketId = 82_031;
             FightSettleResponse normalSettle = SettleFight(
                 normalSettlePacketId,
                 normalPreFight,
                 normalStage,
                 characterHp: 100,
-                bossHp: 0);
+                bossHp: 0,
+                fightSeconds: normalFightSeconds);
             BossSingleFightResult normalResult = RequiredBossResult(
                 normalSettle,
                 "Pain Cage normal FightSettleResponse");
@@ -28281,7 +28283,7 @@ namespace AscNet.Test
                 normalRule.LeftTimeScore[coefficientIndex],
                 CultureInfo.InvariantCulture);
             int expectedTimeScore = Math.Min(normalStage.LeftTimeScore,
-                checked((int)Math.Floor((normalStage.PassTimeLimit - 20) * timeCoefficient)));
+                checked((int)Math.Floor((normalStage.PassTimeLimit - normalFightSeconds) * timeCoefficient * normalStage.PassTimeLimit)));
             double hpCoefficient = double.Parse(
                 normalRule.CharLeftHpSocre[coefficientIndex],
                 CultureInfo.InvariantCulture);
@@ -28667,6 +28669,49 @@ namespace AscNet.Test
             AssertEqual(eligibleChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId,
                 repeatedChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId,
                 "Pain Cage intensive feature group is stable within an activity");
+
+            int ultimateStageId = sections
+                .Where(row => row.SectionId == eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId
+                    && row.AfreshId == 1)
+                .SelectMany(row => row.StageId)
+                .First(stageId => stages.Any(row => row.StageId == stageId
+                    && row.PassTimeLimit == 300
+                    && row.LeftTimeScore == 180000));
+            BossSingleStageTable ultimateStage = stages.Single(row => row.StageId == ultimateStageId);
+            BossSingleScoreRuleTable ultimateRule = scoreRules.Single(row => row.Id == ultimateStage.StageId);
+            double ultimateTimeCoefficient = double.Parse(
+                ultimateRule.LeftTimeScore[8 - 1], CultureInfo.InvariantCulture);
+            AssertEqual(2d, ultimateTimeCoefficient,
+                "Pain Cage Ultimate Zone table time coefficient");
+            const int ultimateFightSeconds = 19;
+            PreFightResponse ultimatePreFight = StartFight(
+                82_046,
+                ultimateStage.StageId,
+                stageType: 4);
+            AssertEqual(ultimateStage.PassTimeLimit, ultimatePreFight.FightData.PassTimeLimit,
+                "Pain Cage Ultimate Zone table time limit");
+            FightSettleResponse ultimateSettle = SettleFight(
+                82_047,
+                ultimatePreFight,
+                ultimateStage,
+                characterHp: 100,
+                bossHp: 0,
+                fightSeconds: ultimateFightSeconds);
+            BossSingleFightResult ultimateResult = RequiredBossResult(
+                ultimateSettle,
+                "Pain Cage Ultimate Zone result");
+            int expectedUltimateTimeLeft = ultimateStage.PassTimeLimit - ultimateFightSeconds;
+            AssertEqual(expectedUltimateTimeLeft, ultimateResult.TimeLeft,
+                "Pain Cage Ultimate Zone remaining time from fight input");
+            int expectedUltimateTimeScore = Math.Min(
+                ultimateStage.LeftTimeScore,
+                checked((int)Math.Floor(
+                    expectedUltimateTimeLeft * ultimateTimeCoefficient * ultimateStage.PassTimeLimit)));
+            AssertEqual(true, expectedUltimateTimeScore < ultimateStage.LeftTimeScore,
+                "Pain Cage Ultimate Zone 19-second fight remains below table time-score cap");
+            AssertEqual(expectedUltimateTimeScore, ultimateResult.TimeScore,
+                "Pain Cage Ultimate Zone table-derived remaining-time score");
+
             int previousActivity = player.SimulatedBattlefield.BossActivityNo;
             long rolloverTime = DateTimeOffset.UtcNow.AddDays(8).ToUnixTimeSeconds();
             NotifyFubenBossSingleData rolloverLogin = BuildLogin(player, rolloverTime);
