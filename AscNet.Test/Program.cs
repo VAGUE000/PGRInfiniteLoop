@@ -28640,7 +28640,19 @@ namespace AscNet.Test
                 .OrderByDescending(row => row.GradeType)
                 .First();
             player.SimulatedBattlefield.BossLevelType = challengeNormalGrade.LevelType;
-            player.SimulatedBattlefield.BossTotalScore = challengeGrade.NeedScore - 1;
+            int lockedTotal = challengeGrade.NeedScore - 1;
+            int firstBossScore = lockedTotal / 2;
+            int secondBossScore = lockedTotal / 3;
+            int thirdBossScore = lockedTotal - firstBossScore - secondBossScore;
+            player.SimulatedBattlefield.BossStageRecords = selectedStageIds.Take(3)
+                .Select((stageId, index) => new AscNet.Common.Database.BossSingleStageRecordState
+                {
+                    StageId = stageId,
+                    Score = index == 0 ? firstBossScore : index == 1 ? secondBossScore : thirdBossScore,
+                    MaxScore = index == 0 ? firstBossScore : index == 1 ? secondBossScore : thirdBossScore
+                })
+                .ToList();
+            player.SimulatedBattlefield.BossTotalScore = int.MaxValue;
             NotifyFubenBossSingleData lockedChallengeLogin = BuildLogin(player, null);
             AssertEqual(0, lockedChallengeLogin.FubenBossSingleData.ChallengeLevelType,
                 "Pain Cage below normal-score gate has no intensive metadata");
@@ -28649,10 +28661,14 @@ namespace AscNet.Test
             AssertEqual(0, lockedChallengeLogin.FubenBossSingleData.ChallengeFeatureGroupId,
                 "Pain Cage below normal-score gate has no intensive feature group");
 
-            player.SimulatedBattlefield.BossTotalScore = challengeGrade.NeedScore;
+            player.SimulatedBattlefield.BossStageRecords[2].Score++;
+            player.SimulatedBattlefield.BossStageRecords[2].MaxScore++;
+            player.SimulatedBattlefield.BossTotalScore = 0;
             NotifyFubenBossSingleData eligibleChallengeLogin = BuildLogin(player, null);
             AssertEqual(challengeGrade.LevelType, eligibleChallengeLogin.FubenBossSingleData.ChallengeLevelType,
                 "Pain Cage normal total score unlocks table-backed intensive level");
+            AssertEqual(challengeGrade.NeedScore, eligibleChallengeLogin.FubenBossSingleData.TotalScore,
+                "Pain Cage login repairs total score from persisted stage bests");
             AssertEqual(true, TableReaderV2.Parse<BossSingleGroupTable>()
                     .Single(row => row.Id == challengeGrade.BossGroupId)
                     .SectionId.Contains(eligibleChallengeLogin.FubenBossSingleData.ChallengeSectionId),

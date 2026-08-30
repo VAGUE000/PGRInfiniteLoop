@@ -816,15 +816,24 @@ namespace AscNet.GameServer.Handlers
 
             state.BossResetStageIds.Remove(pending.StageId);
             state.BossNormalStageTeams[pending.SectionId] = pending.Characters.ToList();
-            state.BossCurrentTotalScore = state.BossStageRecords.Sum(value => value.Score);
-            int bestCurrentTotal = state.BossStageRecords.Sum(value => value.MaxScore);
-            state.BossTotalScore = Math.Max(state.BossTotalScore, bestCurrentTotal);
-            state.BossMaxScore = Math.Max(state.BossMaxScore, state.BossTotalScore);
+            RecalculateNormalTotals(state);
             state.BossLastScoreTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             stageData = UpdateStageDatum(session, pending, record.MaxScore);
             session.stage.Save();
             return true;
         }
+
+        private static bool RecalculateNormalTotals(SimulatedBattlefieldState state)
+        {
+            int currentTotal = state.BossStageRecords.Sum(value => value.Score);
+            int total = state.BossStageRecords.Sum(value => value.MaxScore);
+            bool changed = state.BossCurrentTotalScore != currentTotal
+                || state.BossTotalScore != total;
+            state.BossCurrentTotalScore = currentTotal;
+            state.BossTotalScore = total;
+            return changed;
+        }
+
 
         private static StageDatum UpdateStageDatum(Session session, BossSinglePendingScore pending, int bestScore)
         {
@@ -960,6 +969,9 @@ namespace AscNet.GameServer.Handlers
 
             if (TrySelectOnlyOption(state))
                 changed = true;
+            if (RecalculateNormalTotals(state))
+                changed = true;
+
             return changed;
         }
 
